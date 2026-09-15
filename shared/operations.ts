@@ -1,0 +1,56 @@
+export type CenterState = "OPEN" | "FULL" | "CLOSED" | "UNDER_MAINTENANCE" | "EMERGENCY_ONLY";
+export type ResourceState = "AVAILABLE" | "LOW_STOCK" | "OUT_OF_STOCK" | "EXPIRED";
+
+export function calculateCenterMetrics(maximumCapacity: number, currentOccupancy: number, status: CenterState) {
+  const safeCapacity = Math.max(0, maximumCapacity);
+  const safeOccupancy = Math.min(Math.max(0, currentOccupancy), safeCapacity);
+  const availableSlots = safeCapacity - safeOccupancy;
+  const occupancyRate = safeCapacity === 0 ? 0 : Math.round((safeOccupancy / safeCapacity) * 1000) / 10;
+  return { availableSlots, occupancyRate, canAcceptEvacuee: status === "OPEN" && availableSlots > 0, nextStatus: availableSlots === 0 && status === "OPEN" ? "FULL" : status };
+}
+
+export function getResourceStatus(quantity: number, minimumStock: number, expirationDate?: Date | null, now = new Date()): ResourceState {
+  if (expirationDate && expirationDate.getTime() < now.getTime()) return "EXPIRED";
+  if (quantity <= 0) return "OUT_OF_STOCK";
+  if (quantity <= minimumStock) return "LOW_STOCK";
+  return "AVAILABLE";
+}
+
+export type ReportStatus = "PENDING" | "VERIFIED" | "IN_PROGRESS" | "RESOLVED" | "REJECTED";
+export function canTransitionReport(current: ReportStatus, next: ReportStatus) {
+  const transitions: Record<ReportStatus, ReportStatus[]> = { PENDING: ["VERIFIED", "REJECTED"], VERIFIED: ["IN_PROGRESS", "REJECTED"], IN_PROGRESS: ["RESOLVED"], RESOLVED: [], REJECTED: [] };
+  return current === next || transitions[current].includes(next);
+}
+
+export function resolveNotificationDelivery(config: { emailConfigured?: boolean; smsConfigured?: boolean }) {
+  const channels = [config.emailConfigured ? "EMAIL" : null, config.smsConfigured ? "SMS" : null].filter(Boolean) as string[];
+  return { channels: channels.length ? channels : ["IN_APP"], fallback: channels.length === 0 };
+}
+
+const legacyCitizenEmergencyLabel = /^citizen emergency$/i;
+
+/** Short label stored as reportType for citizen submissions (max 80 chars). */
+export function citizenReportTypeFromDanger(danger: string): string {
+  const normalized = danger.trim().replace(/\s+/g, " ");
+  if (!normalized) return "Emergency report";
+  const firstLine = normalized.split(/\r?\n/)[0]?.trim() || normalized;
+  if (firstLine.length <= 80) return firstLine;
+  return `${firstLine.slice(0, 77).trimEnd()}...`;
+}
+
+export function isCitizenSubmittedReportCode(reportCode: string): boolean {
+  return reportCode.startsWith("CIT-");
+}
+
+/** Headline shown in incident lists; legacy rows used a fixed "Citizen emergency" type. */
+export function getRiskReportHeadline(report: {
+  reportCode: string;
+  reportType: string;
+  description?: string | null;
+}): string {
+  if (legacyCitizenEmergencyLabel.test(report.reportType.trim())) {
+    const fromDescription = citizenReportTypeFromDanger(report.description ?? "");
+    return fromDescription === "Emergency report" ? report.reportType : fromDescription;
+  }
+  return report.reportType;
+}

@@ -1,0 +1,1032 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
+import {
+  AlertOctagon,
+  Bell,
+  Building2,
+  CheckCircle2,
+  ChevronRight,
+  CloudRain,
+  LogOut,
+  MapPin,
+  PhoneCall,
+  Search,
+  ShieldCheck,
+  Siren,
+  Volume2,
+  X,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { startLogin } from "@/const";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { trpc } from "@/lib/trpc";
+import RoleOnboarding from "@/components/RoleOnboarding";
+import { getStaticSession } from "@/lib/staticAuth";
+import { MapView } from "@/components/Map";
+import { CircleMarker, MapContainer, TileLayer, useMapEvents } from "react-leaflet";
+import {
+  addOfflineReport,
+  citizenCopy,
+  distanceKm,
+  getDirectionsUrl,
+  getSmsFallbackUrl,
+  parseOfflineReports,
+  projectOfflineMapPoint,
+  serializeOfflineReport,
+  type CitizenEmergencyNotification,
+  type CitizenLanguage,
+  type RealtimeStreamPayload,
+} from "../../../shared/citizen";
+
+type CitizenCenterRow = {
+  name: string;
+  address: string;
+  nameFilipino?: string | null;
+  addressFilipino?: string | null;
+  currentOccupancy: number;
+  maximumCapacity: number;
+  status: string;
+  latitude: string | number;
+  longitude: string | number;
+};
+function CitizenLocationPickerEvents({ onPick }: { onPick: (latitude: number, longitude: number) => void }) {
+  useMapEvents({ click: event => onPick(event.latlng.lat, event.latlng.lng) });
+  return null;
+}
+function CitizenLocationPicker({ latitude, longitude, onPick }: { latitude: number; longitude: number; onPick: (latitude: number, longitude: number) => void }) {
+  return <div className="pateros-location-picker"><div className="pateros-picker-label"><MapPin size={14} /> Pin the incident location inside Pateros</div><MapContainer center={[latitude, longitude]} zoom={14} minZoom={13} maxZoom={18} maxBounds={[[14.53, 121.05], [14.56, 121.09]]} maxBoundsViscosity={1} scrollWheelZoom className="pateros-picker-map"><TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" /><CitizenLocationPickerEvents onPick={onPick} /><CircleMarker center={[latitude, longitude]} radius={9} pathOptions={{ color: "#fff", weight: 3, fillColor: "#c85f5a", fillOpacity: 1 }} /></MapContainer><small>Selected coordinates: {latitude.toFixed(6)}, {longitude.toFixed(6)}</small></div>;
+}
+const fallbackCenters: CitizenCenterRow[] = [
+  {
+    name: "Rizal Tolentino Center",
+    address: "P. Herrera St.",
+    currentOccupancy: 82,
+    maximumCapacity: 120,
+    status: "OPEN",
+    latitude: 14.546,
+    longitude: 121.074,
+  },
+  {
+    name: "M. L. Quezon Center",
+    address: "B. Morcilla St.",
+    currentOccupancy: 48,
+    maximumCapacity: 80,
+    status: "OPEN",
+    latitude: 14.548,
+    longitude: 121.066,
+  },
+  {
+    name: "Sta. Ana Gymnasium",
+    address: "M. Almeda St.",
+    currentOccupancy: 96,
+    maximumCapacity: 150,
+    status: "OPEN",
+    latitude: 14.537,
+    longitude: 121.075,
+  },
+];
+const fallbackAlerts = [
+  {
+    title: "Flood watch in Sta. Ana",
+    message:
+      "Avoid low-lying roads near the creek. Response teams are monitoring water levels.",
+    priority: "CRITICAL",
+  },
+  {
+    title: "Community help line",
+    message:
+      "Call 911 for immediate danger or use Report an emergency to send details to responders.",
+    priority: "HIGH",
+  },
+];
+const fallbackAlertsFil = [
+  {
+    title: "Bantay-baha sa Sta. Ana",
+    message:
+      "Iwasan ang mabababang kalsada malapit sa sapa. Binabantayan ng mga response team ang lebel ng tubig.",
+    priority: "CRITICAL",
+  },
+  {
+    title: "Linya ng tulong",
+    message:
+      "Tumawag sa 911 kung may agarang panganib o gamitin ang Mag-ulat ng emergency.",
+    priority: "HIGH",
+  },
+];
+
+function readStaticCenterRecords(): CitizenCenterRow[] {
+  try {
+    const raw = window.localStorage.getItem("likas-static-centers");
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter(center => center?.name).map(center => ({
+          ...center,
+          latitude: center.latitude ?? 14.544,
+          longitude: center.longitude ?? 121.071,
+        }))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function speakText(text: string, lang = "en-PH") {
+  if (typeof window === "undefined" || !("speechSynthesis" in window))
+    return false;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = lang;
+  window.speechSynthesis.speak(utterance);
+  return true;
+}
+
+function formatLiveEmergencyTime(value: Date | string) {
+  const date = typeof value === "string" ? new Date(value) : value;
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+export default function CitizenHome() {
+  const { user, logout } = useAuth();
+  const { data: centers } = trpc.operations.centers.useQuery();
+  const [staticCenters] = useState<CitizenCenterRow[]>(readStaticCenterRecords);
+  const { data: alerts } = trpc.operations.alerts.useQuery(undefined, {
+    enabled: Boolean(user),
+  });
+  const { data: smsConfig } = trpc.operations.emergencySms.useQuery();
+  const createReportMutation = trpc.operations.createRiskReport.useMutation();
+  const [reportOpen, setReportOpen] = useState(false);
+  const [centerSearch, setCenterSearch] = useState("");
+  const [reportText, setReportText] = useState("");
+  const [location, setLocation] = useState("");
+  const [reportLatitude, setReportLatitude] = useState(14.544);
+  const [reportLongitude, setReportLongitude] = useState(121.071);
+  const [locationPickerOpen, setLocationPickerOpen] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [largeText, setLargeText] = useState(
+    () => window.localStorage.getItem("likas-large-text") === "true"
+  );
+  const [language, setLanguage] = useState<CitizenLanguage>(() =>
+    window.localStorage.getItem("likas-language") === "en" ? "en" : "fil"
+  );
+  const [userLocation, setUserLocation] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
+  const [locationMessage, setLocationMessage] = useState("");
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
+  const [submitMode, setSubmitMode] = useState<"sent" | "queued">("sent");
+  const [submitError, setSubmitError] = useState("");
+  const [cachedCenters, setCachedCenters] = useState<CitizenCenterRow[]>(() => {
+    try {
+      const raw = window.localStorage.getItem("likas-cached-centers");
+      return raw ? (JSON.parse(raw) as CitizenCenterRow[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [liveEmergencyNotifications, setLiveEmergencyNotifications] = useState<
+    CitizenEmergencyNotification[]
+  >([]);
+  const [dismissedLiveEmergencyId, setDismissedLiveEmergencyId] = useState<
+    number | null
+  >(null);
+  const seenLiveEmergencyIdsRef = useRef(new Set<number>());
+  const latestLiveEmergency = liveEmergencyNotifications[0];
+  const t = citizenCopy[language];
+  const speechLanguage = language === "fil" ? "fil-PH" : "en-PH";
+  const offlineSyncingRef = useRef(false);
+  const mapRef = useRef<google.maps.Map | null>(null);
+  const directionsRendererRef = useRef<google.maps.DirectionsRenderer | null>(
+    null
+  );
+  const displayCenters = useMemo(() => {
+    const rows: CitizenCenterRow[] = centers?.length
+      ? centers
+          .slice(0, 3)
+          .map(center => ({
+            ...center,
+            nameFilipino: center.nameFilipino ?? null,
+            addressFilipino: center.addressFilipino ?? null,
+          }))
+      : staticCenters.length
+        ? staticCenters
+        : cachedCenters.length
+        ? cachedCenters.slice(0, 3)
+        : fallbackCenters;
+    const translated = rows.map(center => ({
+      ...center,
+      displayName:
+        language === "fil" ? center.nameFilipino || center.name : center.name,
+      displayAddress:
+        language === "fil"
+          ? center.addressFilipino || center.address
+          : center.address,
+    }));
+    if (!userLocation) return translated;
+    return translated
+      .map(center => ({
+        ...center,
+        distance: distanceKm(userLocation, {
+          lat: Number(center.latitude),
+          lng: Number(center.longitude),
+        }),
+      }))
+      .sort((a, b) => a.distance - b.distance);
+  }, [centers, staticCenters, cachedCenters, language, userLocation]);
+  const visibleCenters = useMemo(() => {
+    const query = centerSearch.trim().toLowerCase();
+    if (!query) return displayCenters;
+    return displayCenters.filter(center =>
+      `${center.displayName} ${center.displayAddress} ${center.status}`.toLowerCase().includes(query)
+    );
+  }, [centerSearch, displayCenters]);
+  const usingCachedCenters = !centers?.length && cachedCenters.length > 0;
+  const displayAlerts = useMemo(() => {
+    const rows = alerts?.length
+      ? alerts.slice(0, 3)
+      : language === "fil"
+        ? fallbackAlertsFil
+        : fallbackAlerts;
+    return rows.map(alert => ({
+      ...alert,
+      title: String(
+        language === "fil"
+          ? "titleFilipino" in alert
+            ? alert.titleFilipino || alert.title
+            : alert.title
+          : alert.title
+      ),
+      message: String(
+        language === "fil"
+          ? "messageFilipino" in alert
+            ? alert.messageFilipino || alert.message
+            : alert.message
+          : alert.message
+      ),
+    }));
+  }, [alerts, language]);
+  const smsUrl = getSmsFallbackUrl(
+    smsConfig?.officialNumber || "09171234567",
+    `${language === "fil" ? "EMERGENCY / EMERGENCY REPORT" : "EMERGENCY REPORT"}: ${reportText || "Need help"} — ${location || "Location unavailable"}`
+  );
+
+  useEffect(() => {
+    if (centers?.length) {
+      window.localStorage.setItem(
+        "likas-cached-centers",
+        JSON.stringify(centers)
+      );
+      setCachedCenters(centers);
+    }
+  }, [centers]);
+  useEffect(() => {
+    const isStaticSession = Boolean(
+      getStaticSession() || sessionStorage.getItem("likas-static-demo-role")
+    );
+    if (
+      !user ||
+      isStaticSession ||
+      (user.role !== "citizen" && user.role !== "user") ||
+      typeof EventSource === "undefined"
+    )
+      return;
+
+    const source = new EventSource("/api/stream");
+    source.onmessage = event => {
+      let payload: RealtimeStreamPayload;
+      try {
+        payload = JSON.parse(event.data) as RealtimeStreamPayload;
+      } catch {
+        return;
+      }
+      if (
+        payload.type !== "incident" ||
+        !Number.isInteger(payload.data.id) ||
+        seenLiveEmergencyIdsRef.current.has(payload.data.id)
+      )
+        return;
+
+      seenLiveEmergencyIdsRef.current.add(payload.data.id);
+      setLiveEmergencyNotifications(previous => [
+        payload.data,
+        ...previous.filter(item => item.id !== payload.data.id),
+      ].slice(0, 5));
+
+      const title = language === "fil"
+        ? "May bagong emergency sa lugar"
+        : "Emergency reported nearby";
+      const description = `${payload.data.reportType} · ${payload.data.location}`;
+      toast(title, {
+        description,
+        duration: 12000,
+      });
+    };
+    return () => source.close();
+  }, [user, language]);
+  useEffect(() => {
+    const online = () => setIsOnline(true);
+    const offline = () => setIsOnline(false);
+    window.addEventListener("online", online);
+    window.addEventListener("offline", offline);
+    if (!navigator.geolocation) setLocationMessage(t.locationDenied);
+    else
+      navigator.geolocation.getCurrentPosition(
+        position => {
+          setUserLocation({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+          });
+          setLocationMessage(t.located);
+        },
+        () => setLocationMessage(t.locationDenied),
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    return () => {
+      window.removeEventListener("online", online);
+      window.removeEventListener("offline", offline);
+    };
+  }, [language, t.located, t.locationDenied]);
+  useEffect(() => {
+    const syncQueued = async () => {
+      if (!user || offlineSyncingRef.current) return;
+      const raw =
+        window.localStorage.getItem("likas-offline-reports") ||
+        window.localStorage.getItem("likas-offline-report");
+      if (!raw) return;
+      offlineSyncingRef.current = true;
+      try {
+        const remaining = parseOfflineReports(raw);
+        while (remaining.length) {
+          const queued = remaining[0];
+          await createReportMutation.mutateAsync({
+            reportCode: `CIT-${Date.now()}-${remaining.length}`,
+            reportType: "Citizen emergency",
+            description: queued.reportText,
+            location: queued.location,
+            latitude: queued.latitude,
+            longitude: queued.longitude,
+            priority: "HIGH",
+          });
+          remaining.shift();
+          if (remaining.length)
+            window.localStorage.setItem("likas-offline-reports", JSON.stringify(remaining));
+          else {
+            window.localStorage.removeItem("likas-offline-reports");
+            window.localStorage.removeItem("likas-offline-report");
+          }
+        }
+      } catch {
+        // Keep the current queue so the next online event can retry it.
+      } finally {
+        offlineSyncingRef.current = false;
+      }
+    };
+    window.addEventListener("online", syncQueued);
+    if (navigator.onLine) void syncQueued();
+    return () => window.removeEventListener("online", syncQueued);
+  }, [user]);
+  function showDirections(center: {
+    latitude: string | number;
+    longitude: string | number;
+  }) {
+    const destination = {
+      lat: Number(center.latitude),
+      lng: Number(center.longitude),
+    };
+    if (mapRef.current && window.google?.maps?.DirectionsService) {
+      const service = new window.google.maps.DirectionsService();
+      const renderer =
+        directionsRendererRef.current ||
+        new window.google.maps.DirectionsRenderer({ map: mapRef.current });
+      directionsRendererRef.current = renderer;
+      service.route(
+        {
+          origin: userLocation || mapRef.current.getCenter() || destination,
+          destination,
+          travelMode: window.google.maps.TravelMode.WALKING,
+        },
+        (result, status) => {
+          if (status === "OK" && result) renderer.setDirections(result);
+          else
+            window.open(
+              getDirectionsUrl(destination, userLocation || undefined),
+              "_blank",
+              "noopener,noreferrer"
+            );
+        }
+      );
+    } else {
+      window.open(
+        getDirectionsUrl(destination, userLocation || undefined),
+        "_blank",
+        "noopener,noreferrer"
+      );
+    }
+  }
+  function readPage() {
+    const noAlert =
+      language === "fil" ? "Walang agarang alerto" : "No urgent alert";
+    const ready =
+      language === "fil" ? "Handa ang mga center." : "All centers are ready.";
+    speakText(
+      `${t.welcome} ${displayAlerts[0]?.title || noAlert}. ${displayAlerts[0]?.message || ready} ${displayCenters.length} ${t.nearby}. ${t.report}.`,
+      speechLanguage
+    );
+  }
+  async function handleLogout() {
+    await logout();
+    window.location.href = "/login";
+  }
+  function submitReport() {
+    if (
+      !reportText.trim() ||
+      !location.trim() ||
+      createReportMutation.isPending
+    )
+      return;
+    if (!isOnline) {
+      window.localStorage.setItem(
+        "likas-offline-reports",
+        addOfflineReport(window.localStorage.getItem("likas-offline-reports"), {
+          reportText: reportText.trim(),
+          location: location.trim(),
+          latitude: reportLatitude,
+          longitude: reportLongitude,
+          createdAt: Date.now(),
+        })
+      );
+      setSubmitMode("queued");
+      setSubmitted(true);
+      speakText(t.queued, speechLanguage);
+      return;
+    }
+    if (getStaticSession() || sessionStorage.getItem("likas-static-demo-role")) {
+      const reports = JSON.parse(window.localStorage.getItem("likas-static-reports") || "[]");
+      reports.unshift({
+        id: -Date.now(),
+        reportCode: `CIT-${Date.now()}`,
+        reportType: "Citizen emergency",
+        description: reportText.trim(),
+        location: location.trim(),
+        latitude: reportLatitude,
+        longitude: reportLongitude,
+        priority: "HIGH",
+        status: "PENDING",
+      });
+      window.localStorage.setItem("likas-static-reports", JSON.stringify(reports));
+      window.dispatchEvent(new Event("likas-static-reports-changed"));
+      setSubmitMode("sent");
+      setSubmitted(true);
+      speakText(t.sent, speechLanguage);
+      return;
+    }
+    createReportMutation.mutate(
+      {
+        reportCode: `CIT-${Date.now()}`,
+        reportType: "Citizen emergency",
+        description: reportText.trim(),
+        location: location.trim(),
+        latitude: reportLatitude,
+        longitude: reportLongitude,
+        priority: "HIGH",
+      },
+      {
+        onSuccess: () => {
+          setSubmitMode("sent");
+          setSubmitted(true);
+          speakText(t.sent, speechLanguage);
+        },
+        onError: (error) => {
+          // Network/offline error — queue for retry
+          if (!navigator.onLine || error.message?.toLowerCase().includes("fetch")) {
+            window.localStorage.setItem(
+              "likas-offline-reports",
+              addOfflineReport(
+                window.localStorage.getItem("likas-offline-reports"),
+                {
+                  reportText: reportText.trim(),
+                  location: location.trim(),
+                  latitude: reportLatitude,
+                  longitude: reportLongitude,
+                  createdAt: Date.now(),
+                }
+              )
+            );
+            setSubmitMode("queued");
+            setSubmitted(true);
+            speakText(t.queued, speechLanguage);
+          } else {
+            // Server error — show the real error message
+            const msg = error.message || (language === "fil"
+              ? "Hindi maipadala ang ulat. Subukan muli o gamitin ang SMS."
+              : "Report could not be sent. Please try again or use SMS.");
+            setSubmitError(msg);
+          }
+        },
+      }
+    );
+  }
+
+  return (
+    <div className={`citizen-app ${largeText ? "large-text" : ""}`}>
+      <RoleOnboarding role={user?.role || "citizen"} />
+      <header className="citizen-header">
+        <div className="citizen-brand">
+          <div className="brand-mark">
+            <ShieldCheck size={22} />
+          </div>
+          <div>
+            <strong>PROJECT LIKAS</strong>
+            <span>{t.subtitle}</span>
+          </div>
+        </div>
+        <div className="citizen-header-actions">
+          <div className="language-toggle" role="group" aria-label="Language">
+            <button
+              className={language === "en" ? "selected" : ""}
+              onClick={() => {
+                setLanguage("en");
+                window.localStorage.setItem("likas-language", "en");
+              }}
+            >
+              English
+            </button>
+            <button
+              className={language === "fil" ? "selected" : ""}
+              onClick={() => {
+                setLanguage("fil");
+                window.localStorage.setItem("likas-language", "fil");
+              }}
+            >
+              Filipino
+            </button>
+          </div>
+          <Button variant="outline" className="speak-button" onClick={readPage}>
+            <Volume2 size={18} /> {t.readPage}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() =>
+              setLargeText(value => {
+                const next = !value;
+                window.localStorage.setItem("likas-large-text", String(next));
+                return next;
+              })
+            }
+            aria-pressed={largeText}
+          >
+            {largeText ? t.standardText : t.largerText}
+          </Button>
+          {user ? (
+            <>
+              <span className="citizen-role">
+                {user.name || "Resident"} ·{" "}
+                {language === "fil" ? "Mamamayan" : "Citizen"}
+              </span>
+              <Button variant="outline" className="logout-button" onClick={handleLogout}>
+                <LogOut size={16} /> {language === "fil" ? "Lumabas" : "Log out"}
+              </Button>
+            </>
+          ) : (
+            <Button
+              onClick={() => {
+                window.location.href = "/login";
+              }}
+            >
+              {t.signIn}
+            </Button>
+          )}
+        </div>
+      </header>
+      {latestLiveEmergency && latestLiveEmergency.id !== dismissedLiveEmergencyId && (
+        <section className="citizen-live-emergency" role="alert" aria-live="assertive">
+          <Siren size={24} aria-hidden="true" />
+          <div className="citizen-live-emergency-copy">
+            <span className="eyebrow">{language === "fil" ? "AGARANG BALITA" : "LIVE EMERGENCY"}</span>
+            <strong>{language === "fil" ? "May bagong emergency sa lugar" : "Emergency reported nearby"}</strong>
+            <p>{latestLiveEmergency.reportType} · {latestLiveEmergency.location}</p>
+            <small>
+              {language === "fil" ? "Iwasan ang lugar at sundin ang opisyal na abiso." : "Avoid the area and follow official guidance."}
+              {latestLiveEmergency.createdAt && ` · ${formatLiveEmergencyTime(latestLiveEmergency.createdAt)}`}
+            </small>
+          </div>
+          <button
+            type="button"
+            className="citizen-live-emergency-dismiss"
+            onClick={() => setDismissedLiveEmergencyId(latestLiveEmergency.id)}
+            aria-label={language === "fil" ? "Isara ang abiso" : "Dismiss notification"}
+          >
+            <X size={18} />
+          </button>
+        </section>
+      )}
+      <main className="citizen-main">
+        <section className="citizen-welcome">
+          <div>
+            <span className="eyebrow">
+              <span className="live-dot" /> {t.safety}
+            </span>
+            <h1>Hi, {user?.name?.trim() || "Resident"}</h1>
+            <p>{t.intro}</p>
+            <small
+              className={`citizen-connectivity ${isOnline ? "online" : "offline"}`}
+            >
+              {isOnline ? locationMessage || t.locating : t.offline}
+            </small>
+          </div>
+          <div className="citizen-weather">
+            <CloudRain size={24} />
+            <span>
+              <strong>29°</strong>
+              <small>
+                {language === "fil"
+                  ? "Maulap na may ulan · Pateros"
+                  : "Partly cloudy · Pateros"}
+              </small>
+            </span>
+          </div>
+        </section>
+        <section className="citizen-actions">
+          <button
+            className="citizen-emergency"
+            onClick={() => {
+              setReportOpen(true);
+            }}
+          >
+            <span className="emergency-icon">
+              <Siren size={28} />
+            </span>
+            <span>
+              <strong>{t.report}</strong>
+              <small>{t.reportHelp}</small>
+            </span>
+            <ChevronRight size={24} />
+          </button>
+          <a className="help-call" href="tel:911">
+            <PhoneCall size={20} />
+            <span>
+              <strong>{t.immediate}</strong>
+              <small>{t.call911}</small>
+            </span>
+          </a>
+        </section>
+        <section className="citizen-section-head">
+          <div>
+            <span className="eyebrow">{t.safePlaces}</span>
+            <h2>{t.nearby}</h2>
+            <p>{t.nearbyHelp}</p>
+          </div>
+          <label className="citizen-center-search">
+            <Search size={16} />
+            <Input value={centerSearch} onChange={event => setCenterSearch(event.target.value)} placeholder={language === "fil" ? "Maghanap ng evacuation center" : "Search evacuation centers"} aria-label={language === "fil" ? "Maghanap ng evacuation center" : "Search evacuation centers"} />
+          </label>
+          <button
+            onClick={() =>
+              speakText(
+                displayCenters
+                  .map(
+                    center =>
+                      `${center.displayName} is ${center.status === "OPEN" ? t.open.toLowerCase() : center.status.toLowerCase()}, with ${center.maximumCapacity - center.currentOccupancy} spaces available.`
+                  )
+                  .join(" ")
+              )
+            }
+            aria-label={t.readCenters}
+          >
+            <Volume2 size={20} />
+          </button>
+        </section>
+        <section className="citizen-centers">
+          {visibleCenters.map(center => {
+            const available = Math.max(
+              0,
+              center.maximumCapacity - center.currentOccupancy
+            );
+            const distance = (center as { distance?: number }).distance;
+            const centerLat = Number(center.latitude);
+            const centerLng = Number(center.longitude);
+            const isOpen = center.status === "OPEN";
+            return (
+              <article
+                className="citizen-center-card"
+                key={String(center.name)}
+              >
+                <div className="citizen-center-icon">
+                  <Building2 size={24} />
+                </div>
+                <div className="citizen-center-copy">
+                  <div className="citizen-card-top">
+                    <strong>{String(center.displayName)}</strong>
+                    <span
+                      className={`citizen-status ${isOpen ? "open" : "closed"}`}
+                    >
+                      {isOpen ? t.open : center.status}
+                    </span>
+                  </div>
+                  <p>
+                    <MapPin size={14} /> {String(center.displayAddress)}
+                  </p>
+                  <div className="citizen-capacity">
+                    <div>
+                      <strong>{available}</strong>
+                      <small>{t.spaces}</small>
+                    </div>
+                    <span>
+                      {center.currentOccupancy}{" "}
+                      {language === "fil" ? "sa" : "of"}{" "}
+                      {center.maximumCapacity} {t.people}
+                    </span>
+                  </div>
+                  <ProgressBar
+                    value={
+                      (center.currentOccupancy / center.maximumCapacity) * 100
+                    }
+                  />
+                  <div className="citizen-center-actions">
+                    {distance !== undefined && (
+                      <span>
+                        {distance.toFixed(1)} {t.kmAway}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => showDirections(center)}
+                    >
+                      <MapPin size={14} /> {t.directions}
+                    </button>
+                  </div>
+                </div>
+              </article>
+            );
+          })}
+        </section>
+        <section className="citizen-map-section">
+          <div className="citizen-section-head">
+            <div>
+              <span className="eyebrow">{t.nearby}</span>
+              <h2>
+                {language === "fil"
+                  ? "Mapa at direksyon"
+                  : "Map and directions"}
+              </h2>
+              <p>
+                {usingCachedCenters || !isOnline
+                  ? language === "fil"
+                    ? "Offline na mapa: ginagamit ang huling naka-save na listahan ng mga center."
+                    : "Offline map: using the last saved center list."
+                  : language === "fil"
+                    ? "Makikita ang mga center sa mapa. Pindutin ang Kumuha ng direksyon para sa ruta."
+                    : "See centers on the map. Choose Get directions for an in-app walking route."}
+              </p>
+            </div>
+          </div>
+          {isOnline && (
+            <MapView
+              className="citizen-map"
+              initialCenter={{ lat: 14.544, lng: 121.071 }}
+              initialZoom={14}
+              onMapReady={map => {
+                mapRef.current = map;
+                if (window.google?.maps?.marker?.AdvancedMarkerElement)
+                  displayCenters.forEach(center => {
+                    const marker =
+                      new window.google.maps.marker.AdvancedMarkerElement({
+                        map,
+                        position: {
+                          lat: Number(center.latitude),
+                          lng: Number(center.longitude),
+                        },
+                        title: String(center.displayName),
+                      });
+                    marker.addListener("click", () => showDirections(center));
+                  });
+              }}
+            />
+          )}
+          {!isOnline && (
+            <div className="offline-map-surface" role="status">
+              <MapPin size={24} />
+              <strong>
+                {language === "fil" ? "Offline na mapa" : "Offline map"}
+              </strong>
+              <span>
+                {language === "fil"
+                  ? "Ipinapakita ang mga naka-save na center at kanilang lokasyon. Gamitin ang Kumuha ng direksyon kapag may internet."
+                  : "Showing saved centers and their coordinates. Get directions will open when internet is available."}
+              </span>
+              <div
+                className="offline-map-plot"
+                aria-label={
+                  language === "fil"
+                    ? "Offline na mapa ng mga evacuation center"
+                    : "Offline map of evacuation centers"
+                }
+              >
+                {userLocation && (
+                  <span
+                    className="offline-map-user"
+                    style={{
+                      left: `${projectOfflineMapPoint(userLocation).left}%`,
+                      top: `${projectOfflineMapPoint(userLocation).top}%`,
+                    }}
+                    title={
+                      language === "fil"
+                        ? "Ang inyong lokasyon"
+                        : "Your location"
+                    }
+                  />
+                )}{" "}
+                {visibleCenters.map(center => {
+                  const point = projectOfflineMapPoint({
+                    lat: Number(center.latitude),
+                    lng: Number(center.longitude),
+                  });
+                  return (
+                    <button
+                      type="button"
+                      key={String(center.displayName)}
+                      className="offline-map-marker"
+                      style={{ left: `${point.left}%`, top: `${point.top}%` }}
+                      onClick={() => showDirections(center)}
+                      title={`${String(center.displayName)} · ${Number(center.latitude).toFixed(4)}, ${Number(center.longitude).toFixed(4)}`}
+                    >
+                      <MapPin size={16} />
+                      <span>{String(center.displayName)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {visibleCenters.map(center => (
+                <div
+                  key={`row-${String(center.displayName)}`}
+                  className="offline-map-row"
+                >
+                  <MapPin size={14} />
+                  <span>{String(center.displayName)}</span>
+                  <small>
+                    {String(center.displayAddress)} ·{" "}
+                    {Number(center.latitude).toFixed(4)},{" "}
+                    {Number(center.longitude).toFixed(4)}
+                  </small>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+        <section className="citizen-alerts">
+          <div className="citizen-section-head">
+            <div>
+              <span className="eyebrow">{t.updates}</span>
+              <h2>{t.alerts}</h2>
+            </div>
+            <button
+              onClick={() =>
+                speakText(
+                  displayAlerts
+                    .map(alert => `${alert.title}. ${alert.message}`)
+                    .join(" ")
+                )
+              }
+              aria-label={t.readAlerts}
+            >
+              <Volume2 size={20} />
+            </button>
+          </div>
+          {displayAlerts.map(alert => (
+            <article
+              className={`citizen-alert ${alert.priority === "CRITICAL" ? "critical" : ""}`}
+              key={String(alert.title)}
+            >
+              <AlertOctagon size={22} />
+              <div>
+                <strong>{String(alert.title)}</strong>
+                <p>{String(alert.message)}</p>
+              </div>
+              <Bell size={18} />
+            </article>
+          ))}
+        </section>
+      </main>
+      {reportOpen && (
+        <div
+          className="citizen-modal-backdrop"
+          onClick={() => setReportOpen(false)}
+        >
+          <section
+            className="citizen-report-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="citizen-report-title"
+            onClick={event => event.stopPropagation()}
+          >
+            <button
+              className="citizen-modal-close"
+              onClick={() => setReportOpen(false)}
+              aria-label="Close report"
+            >
+              <X size={22} />
+            </button>
+            {submitted ? (
+              <div className="citizen-success">
+                <CheckCircle2 size={46} />
+                <h2>{submitMode === "queued" ? t.queued : t.sent}</h2>
+                <p>
+                  {submitMode === "queued"
+                    ? t.queuedHelp
+                    : language === "fil"
+                      ? "Salamat. Makikita ng mga responder ang inyong ulat. Tumawag sa 911 kung may agarang panganib."
+                      : "Thank you. Responders can now review your report. If someone is in immediate danger, call 911."}
+                </p>
+                {submitMode === "queued" && (
+                  <a className="sms-fallback" href={smsUrl}>
+                    {t.sendSms}
+                  </a>
+                )}
+                <Button
+                  onClick={() => {
+                    setSubmitted(false);
+                    setReportOpen(false);
+                  }}
+                >
+                  {t.done}
+                </Button>
+              </div>
+            ) : (
+              <>
+                <span className="eyebrow">{t.reportEyebrow}</span>
+                <h2 id="citizen-report-title">{t.what}</h2>
+                {(!isOnline || submitError) && (
+                  <p className="offline-report-note" role="alert">
+                    {submitError || t.offline}
+                  </p>
+                )}
+                <label className="citizen-input-label">
+                  {t.describe}
+                  <textarea
+                    value={reportText}
+                    onChange={event => setReportText(event.target.value)}
+                    placeholder={t.example}
+                  />
+                </label>
+                <label className="citizen-input-label">
+                  {t.location}
+                  <Input
+                    value={location}
+                    onFocus={() => setLocationPickerOpen(true)}
+                    onChange={event => setLocation(event.target.value)}
+                    placeholder={
+                      language === "fil"
+                        ? "Barangay, kalye, o palatandaan"
+                        : "Barangay, street, or landmark"
+                    }
+                  />
+                </label>
+                {locationPickerOpen && <CitizenLocationPicker latitude={reportLatitude} longitude={reportLongitude} onPick={(latitude, longitude) => { setReportLatitude(latitude); setReportLongitude(longitude); setLocation(`Pinned location: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`); }} />}
+                <div className="citizen-modal-actions">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setReportOpen(false);
+                      setSubmitError("");
+                    }}
+                  >
+                    {t.cancel}
+                  </Button>
+                  {(!isOnline || submitError) && (
+                    <a className="sms-fallback sms-button" href={smsUrl}>
+                      {t.sendSms}
+                    </a>
+                  )}
+                  <Button
+                    disabled={
+                      !reportText.trim() ||
+                      !location.trim() ||
+                      createReportMutation.isPending
+                    }
+                    onClick={() => { setSubmitError(""); submitReport(); }}
+                  >
+                    {createReportMutation.isPending ? t.sending : t.send}{" "}
+                    <ChevronRight size={18} />
+                  </Button>
+                </div>
+              </>
+            )}
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProgressBar({ value }: { value: number }) {
+  return (
+    <div
+      className="citizen-progress"
+      aria-label={`${Math.round(value)} percent occupied`}
+    >
+      <span style={{ width: `${Math.min(100, value)}%` }} />
+    </div>
+  );
+}

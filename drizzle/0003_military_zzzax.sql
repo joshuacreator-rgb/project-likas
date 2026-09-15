@@ -1,0 +1,15 @@
+ALTER TABLE `activity_logs` ADD CONSTRAINT `activity_logs_actorId_users_id_fk` FOREIGN KEY (`actorId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `alerts` ADD CONSTRAINT `alerts_createdBy_users_id_fk` FOREIGN KEY (`createdBy`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `center_staff` ADD CONSTRAINT `center_staff_centerId_evacuation_centers_id_fk` FOREIGN KEY (`centerId`) REFERENCES `evacuation_centers`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `center_staff` ADD CONSTRAINT `center_staff_userId_users_id_fk` FOREIGN KEY (`userId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `evacuees` ADD CONSTRAINT `evacuees_centerId_evacuation_centers_id_fk` FOREIGN KEY (`centerId`) REFERENCES `evacuation_centers`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `evidence_files` ADD CONSTRAINT `evidence_files_reportId_risk_reports_id_fk` FOREIGN KEY (`reportId`) REFERENCES `risk_reports`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `report_exports` ADD CONSTRAINT `report_exports_requestedBy_users_id_fk` FOREIGN KEY (`requestedBy`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `resource_transactions` ADD CONSTRAINT `resource_transactions_resourceId_resources_id_fk` FOREIGN KEY (`resourceId`) REFERENCES `resources`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `resource_transactions` ADD CONSTRAINT `resource_transactions_userId_users_id_fk` FOREIGN KEY (`userId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `resources` ADD CONSTRAINT `resources_centerId_evacuation_centers_id_fk` FOREIGN KEY (`centerId`) REFERENCES `evacuation_centers`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `responder_actions` ADD CONSTRAINT `responder_actions_reportId_risk_reports_id_fk` FOREIGN KEY (`reportId`) REFERENCES `risk_reports`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `responder_actions` ADD CONSTRAINT `responder_actions_responderId_users_id_fk` FOREIGN KEY (`responderId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `risk_reports` ADD CONSTRAINT `risk_reports_reporterId_users_id_fk` FOREIGN KEY (`reporterId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `risk_reports` ADD CONSTRAINT `risk_reports_assignedResponderId_users_id_fk` FOREIGN KEY (`assignedResponderId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `system_settings` ADD CONSTRAINT `system_settings_updatedBy_users_id_fk` FOREIGN KEY (`updatedBy`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;
