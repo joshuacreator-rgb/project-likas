@@ -11,11 +11,12 @@ import {
 } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { getResourceStatus } from "../shared/operations";
-import { sendVerificationEmail } from "./_core/email";
+import { sendInvitationEmail, sendVerificationEmail } from "./_core/email";
 import {
   isRoleSelectionAllowed,
   isSelfRegistrationAllowed,
   requiresTwoFactor,
+  roleLabels,
 } from "../shared/roles";
 import {
   acceptInvitation,
@@ -731,6 +732,22 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const result = await createInvitation(input, ctx.user.id);
+        const baseUrl = process.env.PUBLIC_URL ?? process.env.RAILWAY_PUBLIC_DOMAIN ?? "http://localhost:5173";
+        const inviteToken = result.inviteToken ?? "";
+        const inviteUrl = `${baseUrl}/accept-invitation?token=${inviteToken}`;
+
+        try {
+          await sendInvitationEmail({
+            email: result.email,
+            name: input.name,
+            role: roleLabels[input.role as keyof typeof roleLabels] ?? input.role,
+            token: inviteToken,
+            inviteUrl,
+          });
+        } catch (error) {
+          console.error("[Email] Invitation email failed for", result.email, error);
+        }
+
         await logActivity({
           actorId: ctx.user.id,
           action: "INVITE",

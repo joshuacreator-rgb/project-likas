@@ -17,3 +17,26 @@ export async function sendVerificationEmail(input: { email: string; name: string
   });
   if (!response.ok) throw new TRPCError({ code: "BAD_GATEWAY", message: "Verification email could not be sent." });
 }
+
+export async function sendInvitationEmail(input: { email: string; name: string; role: string; token: string; inviteUrl: string }) {
+  if (!ENV.resendApiKey || !ENV.emailFrom) {
+    console.warn("[Email] Invitation email not sent because RESEND_API_KEY or EMAIL_FROM is not configured.");
+    return;
+  }
+
+  const roleLabel = input.role.charAt(0).toUpperCase() + input.role.slice(1);
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ENV.resendApiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: ENV.emailFrom,
+      to: [input.email],
+      subject: "You've been invited to join Project Likas",
+      text: `Hi ${input.name},\n\nYou have been invited to join Project Likas as ${roleLabel}.\n\nInvitation link: ${input.inviteUrl}\n\nThis invitation expires in 7 days and can only be used once.\n\nAfter opening the link, you can create your password and complete your account setup.\n\nIf you did not expect this invitation, you can safely ignore this email.`,
+    }),
+  });
+
+  if (!response.ok) {
+    console.error("[Email] Invitation email could not be sent:", await response.text());
+  }
+}
