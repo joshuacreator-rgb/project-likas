@@ -22,8 +22,11 @@ function Router() {
       <Route path={"/register"} component={AccountRegister} />
       <Route path={"/recover"} component={PasswordRecovery} />
       <Route path={"/accept-invitation"} component={AcceptInvitation} />
+      <Route path={"/admin"} component={Home} />
+      <Route path={"/staff"} component={Home} />
+      <Route path={"/responder"} component={Home} />
+      <Route path={"/citizen"} component={CitizenHome} />
       <Route path={"/"} component={Home} />
-      <Route path="/citizen" component={CitizenHome} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

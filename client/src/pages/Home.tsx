@@ -486,8 +486,9 @@ export default function Home() {
   }
 
   if (isCitizen) return <CitizenHome />;
+  const dashboardRole = user?.role ?? "admin";
   return (
-    <div className={`likas-app ${largeText ? "large-text" : ""}`}>
+    <div className={`likas-app internal-shell ${dashboardRole}-shell ${largeText ? "large-text" : ""}`}>
       <RoleOnboarding role={user?.role} />
       <aside className={`likas-sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="brand-lockup">

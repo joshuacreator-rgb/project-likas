@@ -12,10 +12,12 @@ describe("role labels", () => {
     expect(formatRoleLabel("user")).toBe("Citizen");
     expect(formatRoleLabel(null)).toBe("Citizen");
   });
-  it("routes citizens to the simplified home and others to operations", () => {
+  it("routes each role to its own dashboard", () => {
+    expect(getHomePath("admin")).toBe("/admin");
+    expect(getHomePath("staff")).toBe("/staff");
+    expect(getHomePath("responder")).toBe("/responder");
     expect(getHomePath("citizen")).toBe("/citizen");
     expect(getHomePath("user")).toBe("/citizen");
-    expect(getHomePath("responder")).toBe("/");
   });
   it("falls back to typing when browser voice input is unavailable", () => {
     expect(getVoiceInputMode(true)).toBe("voice");

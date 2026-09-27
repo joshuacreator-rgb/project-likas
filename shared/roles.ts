@@ -11,7 +11,12 @@ export function getRoleFromSearch(search: string | undefined, fallback: AccountR
 export function getLoginPath(role?: AccountRole) { return role ? `/login?role=${role}` : "/login"; }
 export function getRegisterPath(role: AccountRole = "citizen") { return `/register?role=${role}`; }
 export function formatRoleLabel(role?: string | null) { return roleLabels[(role as RoleName) || "citizen"] || "Citizen"; }
-export function getHomePath(role?: string | null) { return role === "citizen" || role === "user" ? "/citizen" : "/"; }
+export function getHomePath(role?: string | null) {
+  if (role === "admin") return "/admin";
+  if (role === "staff") return "/staff";
+  if (role === "responder") return "/responder";
+  return role === "citizen" || role === "user" ? "/citizen" : "/login";
+}
 export function isRoleSelectionAllowed(selected: string, stored: string) { return selected === stored || (selected === "citizen" && stored === "user"); }
 export function isSelfRegistrationAllowed(role?: string | null) { return role === "citizen" || role === undefined || role === null; }
 export function requiresTwoFactor(role?: string | null, enabled?: boolean) { return Boolean(enabled && role === "responder"); }
