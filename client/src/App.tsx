@@ -5,7 +5,7 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
-import Login from "./pages/Login";
+import { AdminLogin, CitizenLogin, InternalLogin } from "./pages/Login";
 import AccountRegister from "./pages/AccountRegister";
 import PasswordRecovery from "./pages/PasswordRecovery";
 import AcceptInvitation from "./pages/AcceptInvitation";
@@ -14,7 +14,11 @@ import CitizenHome from "./pages/CitizenHome";
 function Router() {
   return (
     <Switch>
-      <Route path={"/login"} component={Login} />
+      <Route path={"/login"} component={CitizenLogin} />
+      <Route path={"/admin/login"} component={() => <AdminLogin />} />
+      <Route path={"/staff/login"} component={() => <InternalLogin role="staff" />} />
+      <Route path={"/responder/login"} component={() => <InternalLogin role="responder" />} />
+      <Route path={"/internal/login"} component={() => <InternalLogin />} />
       <Route path={"/register"} component={AccountRegister} />
       <Route path={"/recover"} component={PasswordRecovery} />
       <Route path={"/accept-invitation"} component={AcceptInvitation} />
