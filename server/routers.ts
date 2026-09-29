@@ -16,7 +16,6 @@ import {
   isRoleSelectionAllowed,
   isSelfRegistrationAllowed,
   requiresTwoFactor,
-  roleLabels,
 } from "../shared/roles";
 import {
   acceptInvitation,
@@ -732,20 +731,19 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const result = await createInvitation(input, ctx.user.id);
-        const baseUrl = process.env.PUBLIC_URL ?? process.env.RAILWAY_PUBLIC_DOMAIN ?? "http://localhost:5173";
-        const inviteToken = result.inviteToken ?? "";
+        const baseUrl = process.env.PUBLIC_URL ?? "http://localhost:5173";
+        const inviteToken = result.inviteToken;
         const inviteUrl = `${baseUrl}/accept-invitation?token=${inviteToken}`;
 
         try {
           await sendInvitationEmail({
             email: result.email,
             name: input.name,
-            role: roleLabels[input.role as keyof typeof roleLabels] ?? input.role,
-            token: inviteToken,
+            role: input.role,
             inviteUrl,
           });
         } catch (error) {
-          console.error("[Email] Invitation email failed for", result.email, error);
+          console.warn("[Invite] Email failed:", error);
         }
 
         await logActivity({

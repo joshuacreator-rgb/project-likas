@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import { roleLabels } from "../../shared/roles";
 import { ENV } from "./env";
 
 export async function sendVerificationEmail(input: { email: string; name: string; code: string }) {
@@ -18,13 +19,13 @@ export async function sendVerificationEmail(input: { email: string; name: string
   if (!response.ok) throw new TRPCError({ code: "BAD_GATEWAY", message: "Verification email could not be sent." });
 }
 
-export async function sendInvitationEmail(input: { email: string; name: string; role: string; token: string; inviteUrl: string }) {
+export async function sendInvitationEmail(input: { email: string; name: string; role: string; inviteUrl: string }) {
   if (!ENV.resendApiKey || !ENV.emailFrom) {
     console.warn("[Email] Invitation email not sent because RESEND_API_KEY or EMAIL_FROM is not configured.");
     return;
   }
 
-  const roleLabel = input.role.charAt(0).toUpperCase() + input.role.slice(1);
+  const roleLabel = roleLabels[input.role as keyof typeof roleLabels] ?? input.role;
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${ENV.resendApiKey}`, "Content-Type": "application/json" },
@@ -36,7 +37,5 @@ export async function sendInvitationEmail(input: { email: string; name: string; 
     }),
   });
 
-  if (!response.ok) {
-    console.error("[Email] Invitation email could not be sent:", await response.text());
-  }
+  if (!response.ok) throw new Error(`Resend invitation email failed with status ${response.status}.`);
 }
