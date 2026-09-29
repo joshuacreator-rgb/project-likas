@@ -10,8 +10,9 @@ import {
   router,
 } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
+import { clearRateLimit, enforceRateLimit } from "./_core/rateLimit";
 import { getResourceStatus } from "../shared/operations";
-import { sendInvitationEmail, sendVerificationEmail } from "./_core/email";
+import { sendInvitationEmail, sendPasswordResetEmail } from "./_core/email";
 import {
   isRoleSelectionAllowed,
   isSelfRegistrationAllowed,
@@ -76,7 +77,7 @@ import {
   uploadEvidence,
   upsertCenter,
   verifyLocalCredentials,
-  verifyLocalEmail,
+  getUserByEmail,
   verifyUserTotp,
 } from "./db";
 import { broadcastAlert, broadcastIncident } from "./_core/realtime";
@@ -158,10 +159,15 @@ const publicUser = (user: Awaited<ReturnType<typeof verifyLocalCredentials>>) =>
     updatedAt: user.updatedAt,
     lastSignedIn: user.lastSignedIn,
   };
-const sessionKey = () =>
-  new TextEncoder().encode(
-    process.env.JWT_SECRET ?? "local-development-secret"
-  );
+const sessionKey = () => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error(
+      "JWT_SECRET is not configured. Set JWT_SECRET before starting the server."
+    );
+  }
+  return new TextEncoder().encode(secret);
+};
 async function issueLocalSession(
   ctx: { res: any; req: any },
   user: NonNullable<Awaited<ReturnType<typeof verifyLocalCredentials>>>
@@ -227,6 +233,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        enforceRateLimit(ctx.req, `register:${input.email}`, 5, 60 * 60 * 1000);
         if (!isSelfRegistrationAllowed(input.role))
           throw new TRPCError({
             code: "FORBIDDEN",
@@ -284,6 +291,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        enforceRateLimit(ctx.req, `login:${input.email}`, 10, 60 * 1000);
         const user = await verifyLocalCredentials(input.email, input.password);
         if (!user)
           throw new TRPCError({
@@ -306,6 +314,7 @@ export const appRouter = router({
             message: "Your registration was not approved. Contact an Administrator.",
           });
         if (requiresTwoFactor(user.role, user.twoFactorEnabled)) {
+          clearRateLimit(ctx.req, `login:${input.email}`);
           const challengeToken = await new SignJWT({
             type: "2fa",
             role: user.role,
@@ -322,11 +331,13 @@ export const appRouter = router({
             challengeToken,
           };
         }
+        clearRateLimit(ctx.req, `login:${input.email}`);
         return issueLocalSession(ctx, user);
       }),
     demoLogin: publicProcedure
       .input(z.object({ role: z.enum(["admin", "staff", "responder", "citizen"]) }))
       .mutation(async ({ ctx, input }) => {
+        enforceRateLimit(ctx.req, "demo-login", 10, 60 * 60 * 1000);
         if (process.env.NODE_ENV === "production" && process.env.ENABLE_DEMO_LOGIN !== "true") {
           throw new TRPCError({ code: "FORBIDDEN", message: "Demo access is disabled in production." });
         }
@@ -346,6 +357,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        enforceRateLimit(ctx.req, "2fa", 10, 60 * 1000);
         let userId = 0;
         try {
           const { payload } = await jwtVerify(
@@ -371,9 +383,26 @@ export const appRouter = router({
       }),
     forgotPassword: publicProcedure
       .input(z.object({ email: z.string().email() }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        enforceRateLimit(ctx.req, `reset-request:${input.email}`, 5, 60 * 60 * 1000);
         const token = await issuePasswordReset(input.email);
-        return { accepted: true, devToken: token };
+        const user = await getUserByEmail(input.email);
+        const baseUrl = process.env.PUBLIC_URL ?? "http://localhost:5173";
+        const resetUrl = `${baseUrl}/recover?email=${encodeURIComponent(input.email)}&token=${encodeURIComponent(token)}`;
+        try {
+          await sendPasswordResetEmail({
+            email: input.email,
+            name: user?.name ?? input.email,
+            resetUrl,
+          });
+        } catch (error) {
+          console.warn("[PasswordReset] Recovery email failed; token remains valid:", error);
+        }
+        return {
+          accepted: true as const,
+          devToken: process.env.NODE_ENV === "production" ? undefined : token,
+          resetUrl: process.env.NODE_ENV === "production" ? undefined : resetUrl,
+        };
       }),
     resetPassword: publicProcedure
       .input(
@@ -383,9 +412,10 @@ export const appRouter = router({
           newPassword: z.string().min(10),
         })
       )
-      .mutation(({ input }) =>
-        resetLocalPassword(input.email, input.token, input.newPassword)
-      ),
+      .mutation(({ ctx, input }) => {
+        enforceRateLimit(ctx.req, `reset:${input.email}`, 10, 60 * 60 * 1000);
+        return resetLocalPassword(input.email, input.token, input.newPassword);
+      }),
     changePassword: protectedProcedure
       .input(
         z.object({
@@ -913,27 +943,24 @@ export const appRouter = router({
     saveSmsSettings: adminProcedure
       .input(
         z.object({
-          officialNumber: z.string().regex(/^\\+?[0-9 ()-]{7,20}$/),
+          officialNumber: z.string().regex(/^\+?[0-9 ()-]{7,20}$/),
           provider: z.enum(["NONE", "TWILIO", "VONAGE", "CUSTOM"]),
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await updateSetting(
-          "sms_official_number",
-          input.officialNumber.replace(/[ ()-]/g, ""),
-          ctx.user.id
-        );
+        const storedNumber = input.officialNumber.replace(/[ ()-]/g, "");
+        await updateSetting("sms_official_number", storedNumber, ctx.user.id);
         await updateSetting("sms_provider", input.provider, ctx.user.id);
         await logActivity({
           actorId: ctx.user.id,
           action: "UPDATE",
           entityType: "sms_settings",
           metadata: JSON.stringify({
-            officialNumber: input.officialNumber,
+            officialNumber: storedNumber,
             provider: input.provider,
           }),
         });
-        return input;
+        return { officialNumber: storedNumber, provider: input.provider };
       }),
     queueReportExport: adminProcedure
       .input(z.object({ reportType: z.string().min(2) }))

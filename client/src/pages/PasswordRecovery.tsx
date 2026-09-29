@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, ArrowRight, KeyRound, CheckCircle2, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,18 @@ export default function PasswordRecovery({ embedded = false, onClose }: Password
   const [newPassword, setNewPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [notice, setNotice] = useState("");
+
+  // Prefill from an emailed recovery link: /recover?email=...&token=...
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const emailParam = params.get("email");
+    const tokenParam = params.get("token");
+    if (emailParam) setEmail(emailParam);
+    if (tokenParam) {
+      setToken(tokenParam);
+      setStep("reset");
+    }
+  }, []);
 
   const forgotMutation = trpc.localAuth.forgotPassword.useMutation({
     onSuccess: result => {
@@ -63,11 +75,11 @@ export default function PasswordRecovery({ embedded = false, onClose }: Password
           <div className="login-heading">
             <span className="eyebrow">Password recovery</span>
             <h1>Let’s get you back in.</h1>
-            <p>Enter your account email. We will generate a secure reset token for your account.</p>
+            <p>Enter your account email and we will send you a secure reset link.</p>
           </div>
           <div className="registration-path-note citizen" role="status" style={{ marginBottom: 16 }}>
-            <strong>How to get a reset token</strong>
-            <span>1. Enter your registered email above and click Request password recovery.<br/>2. Your reset token will be automatically generated and filled into the next step.</span>
+            <strong>How to get a reset link</strong>
+            <span>1. Enter your registered email above and click Request password recovery.<br/>2. A secure reset link will be sent to your email{import.meta.env.DEV ? " (the token is also shown here in development)" : ""}. It expires in 30 minutes.</span>
           </div>
           <form
             className="login-form"
@@ -110,7 +122,7 @@ export default function PasswordRecovery({ embedded = false, onClose }: Password
           <div className="login-heading">
             <span className="eyebrow">Set new password</span>
             <h1>Enter your reset token</h1>
-            <p>Your secure reset token has been generated. Choose a new password (at least 10 characters).</p>
+            <p>Paste the token from your reset email, then choose a new password (at least 10 characters).</p>
           </div>
           {token && (
             <div className="registration-path-note citizen" role="status" style={{ marginBottom: 16, background: "#f0fdf4", borderColor: "#bbf7d0" }}>

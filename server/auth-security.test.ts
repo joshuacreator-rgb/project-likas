@@ -47,6 +47,7 @@ function context(currentUser: TrpcContext["user"] = null) {
 }
 
 beforeAll(async () => {
+  process.env.JWT_SECRET = "test-secret-for-auth-security";
   ({ appRouter } = await import("./routers"));
 });
 
@@ -106,7 +107,7 @@ describe("auth security procedures", () => {
       .setSubject("7")
       .setIssuedAt()
       .setExpirationTime("1d")
-      .sign(new TextEncoder().encode(process.env.JWT_SECRET ?? "local-development-secret"));
+      .sign(new TextEncoder().encode(process.env.JWT_SECRET!));
     mockedDb.getUserById.mockResolvedValue({ ...user("admin"), role: "citizen", accountStatus: "APPROVED" });
     const response = { cookie: vi.fn(), clearCookie: vi.fn() };
     const sessionCaller = appRouter.createCaller({ user: null, req: { protocol: "http", headers: {} } as TrpcContext["req"], res: response as unknown as TrpcContext["res"] });

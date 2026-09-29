@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
   return { ...actual, verifyLocalCredentials: vi.fn() };
+});
+
+beforeAll(() => {
+  process.env.JWT_SECRET = "test-secret-for-local-auth";
 });
 
 describe("localAuth.login role choice", () => {

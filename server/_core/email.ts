@@ -19,6 +19,26 @@ export async function sendVerificationEmail(input: { email: string; name: string
   if (!response.ok) throw new TRPCError({ code: "BAD_GATEWAY", message: "Verification email could not be sent." });
 }
 
+export async function sendPasswordResetEmail(input: { email: string; name: string; resetUrl: string }) {
+  if (!ENV.resendApiKey || !ENV.emailFrom) {
+    console.warn("[Email] Password reset email not sent because RESEND_API_KEY or EMAIL_FROM is not configured.");
+    return;
+  }
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ENV.resendApiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: ENV.emailFrom,
+      to: [input.email],
+      subject: "Reset your Project Likas password",
+      text: `Hi ${input.name},\n\nWe received a request to reset your Project Likas password. Open the link below to choose a new password:\n${input.resetUrl}\n\nThis link expires in 30 minutes and can only be used once.\nIf you did not request this, you can safely ignore this email.`,
+    }),
+  });
+  if (!response.ok) {
+    console.warn(`[Email] Password reset email failed with status ${response.status}.`);
+  }
+}
+
 export async function sendInvitationEmail(input: { email: string; name: string; role: string; inviteUrl: string }) {
   if (!ENV.resendApiKey || !ENV.emailFrom) {
     console.warn("[Email] Invitation email not sent because RESEND_API_KEY or EMAIL_FROM is not configured.");

@@ -7,6 +7,7 @@ import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { authenticateRequest, createContext } from "./context";
+import { verifyDatabaseConnection } from "../db";
 import { serveStatic, setupVite } from "./vite";
 import { subscribeRealtime } from "./realtime";
 import type { RealtimeStreamPayload } from "../../shared/citizen";
@@ -30,7 +31,32 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
   throw new Error(`No available port found starting from ${startPort}`);
 }
 
+function assertProductionConfig() {
+  if (process.env.NODE_ENV !== "production") return;
+  const missing = [
+    ["JWT_SECRET", process.env.JWT_SECRET],
+    ["DATABASE_URL", process.env.DATABASE_URL],
+  ]
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required environment variables in production: ${missing.join(", ")}`
+    );
+  }
+}
+
 async function startServer() {
+  assertProductionConfig();
+  if (process.env.NODE_ENV === "production") {
+    const dbConnected = await verifyDatabaseConnection();
+    if (!dbConnected) {
+      console.error(
+        "[Server] Cannot reach DATABASE_URL. Set it and apply migrations (pnpm db:push), then restart."
+      );
+      process.exit(1);
+    }
+  }
   const app = express();
   const server = createServer(app);
   // Configure body parser with larger size limit for file uploads
