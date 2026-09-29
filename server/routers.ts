@@ -732,8 +732,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const result = await createInvitation(input, ctx.user.id);
         const baseUrl = process.env.PUBLIC_URL ?? "http://localhost:5173";
-        const inviteToken = result.inviteToken;
-        const inviteUrl = `${baseUrl}/accept-invitation?token=${inviteToken}`;
+        const inviteUrl = `${baseUrl}/accept-invitation?token=${result.inviteToken}`;
 
         try {
           await sendInvitationEmail({
@@ -742,8 +741,8 @@ export const appRouter = router({
             role: input.role,
             inviteUrl,
           });
-        } catch (error) {
-          console.warn("[Invite] Email failed:", error);
+        } catch (err) {
+          console.warn("[Invite] Email failed, invitation still active:", err);
         }
 
         await logActivity({

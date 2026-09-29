@@ -8,6 +8,7 @@ import { useLocation } from "wouter";
 import { getHomePath } from "../../../shared/roles";
 import { getAuthErrorMessage } from "../../../shared/auth-feedback";
 import { authenticateStaticAccount } from "@/lib/staticAuth";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import AccountRegister from "./AccountRegister";
 import PasswordRecovery from "./PasswordRecovery";
 
@@ -27,8 +28,8 @@ function resolveInternalRole(): InternalLoginRole {
   if (path === "/staff/login") return "staff";
   if (path === "/responder/login") return "responder";
   const requested = new URLSearchParams(window.location.search).get("role");
-  if (requested === "admin" || requested === "staff" || requested === "responder") return requested;
-  return "admin";
+  if (requested === "staff" || requested === "responder") return requested;
+  return "staff";
 }
 
 export function CitizenLogin() {
@@ -203,10 +204,16 @@ export function AdminLogin() {
   return <InternalLogin role="admin" />;
 }
 
-export function InternalLogin({ role: roleOverride }: { role?: InternalLoginRole }) {
+export function InternalLogin({
+  role: roleOverride,
+  allowRoleSelection = false,
+}: {
+  role?: InternalLoginRole;
+  allowRoleSelection?: boolean;
+}) {
   const [, navigate] = useLocation();
   const initialRole = roleOverride ?? resolveInternalRole();
-  const [role] = useState<InternalLoginRole>(initialRole);
+  const [role, setRole] = useState<InternalLoginRole>(initialRole);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -254,19 +261,6 @@ export function InternalLogin({ role: roleOverride }: { role?: InternalLoginRole
     <main className="login-page internal-login-page">
       <div className="login-layout single-column-layout">
         <section className="login-card internal-login-card">
-          <div className="login-brand internal-login-brand">
-            <div className="brand-mark"><ShieldCheck size={22} /></div>
-            <div>
-              <strong>PROJECT LIKAS</strong>
-              <span>Internal Access</span>
-            </div>
-          </div>
-
-          <div className="login-heading internal-login-heading">
-            <span className="eyebrow">Secure access</span>
-            <h1>{internalLoginLabels[role]}</h1>
-          </div>
-
           <form
             className="login-form"
             aria-busy={isSubmitting}
@@ -279,6 +273,28 @@ export function InternalLogin({ role: roleOverride }: { role?: InternalLoginRole
               login.mutate({ email, password, role });
             }}
           >
+            {allowRoleSelection && !isTwoFactorStep && (
+              <label>
+                Role
+                <Select
+                  value={role}
+                  onValueChange={(value) => {
+                    if (value !== "staff" && value !== "responder") return;
+                    setRole(value);
+                    restartLogin();
+                  }}
+                >
+                  <SelectTrigger className="w-full" aria-label="Choose internal role">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="staff">{internalLoginLabels.staff}</SelectItem>
+                    <SelectItem value="responder">{internalLoginLabels.responder}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </label>
+            )}
+
             {isTwoFactorStep ? (
               <label>
                 Authenticator code

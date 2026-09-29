@@ -18,7 +18,7 @@ function Router() {
       <Route path={"/admin/login"} component={() => <AdminLogin />} />
       <Route path={"/staff/login"} component={() => <InternalLogin role="staff" />} />
       <Route path={"/responder/login"} component={() => <InternalLogin role="responder" />} />
-      <Route path={"/internal/login"} component={() => <InternalLogin />} />
+      <Route path={"/internal/login"} component={() => <InternalLogin allowRoleSelection />} />
       <Route path={"/register"} component={AccountRegister} />
       <Route path={"/recover"} component={PasswordRecovery} />
       <Route path={"/accept-invitation"} component={AcceptInvitation} />

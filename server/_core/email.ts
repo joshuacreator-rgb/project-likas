@@ -33,7 +33,7 @@ export async function sendInvitationEmail(input: { email: string; name: string; 
       from: ENV.emailFrom,
       to: [input.email],
       subject: "You've been invited to join Project Likas",
-      text: `Hi ${input.name},\n\nYou have been invited to join Project Likas as ${roleLabel}.\n\nInvitation link: ${input.inviteUrl}\n\nThis invitation expires in 7 days and can only be used once.\n\nAfter opening the link, you can create your password and complete your account setup.\n\nIf you did not expect this invitation, you can safely ignore this email.`,
+      text: `Hi ${input.name},\n\nYou have been invited to join Project Likas as ${roleLabel}.\nClick the link below to set your password and activate your account:\n${input.inviteUrl}\nThis link expires in 7 days and can only be used once.\nIf you did not expect this invitation, ignore this email.`,
     }),
   });
 
