@@ -30,6 +30,10 @@ The local sign-in option remains available when OAuth is not configured.
 
 In-app citizen emergency notifications work without external providers. Configure `EMAIL_PROVIDER_KEY` or `SMS_PROVIDER_KEY` only after selecting and provisioning a provider. Do not put provider secrets in client-side `VITE_` variables.
 
+## Maps & directions (citizen)
+
+The citizen "Map and directions" section and the report location picker use Leaflet with OpenStreetMap tiles — no API key or third-party proxy required, and they work from any host (local dev, Railway, a custom domain). "Get directions" opens a walking route in Google Maps in a new tab (`getDirectionsUrl`). The center data comes from `operations.centers`; until centers exist in the database the citizen page falls back to a small hardcoded demo list, so add real evacuation centers through the admin panel and the map/finder will show the real ones.
+
 ## Operational checks
 
 - Verify an admin can view centers, users, and the Incident map.

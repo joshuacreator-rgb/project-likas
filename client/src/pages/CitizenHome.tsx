@@ -23,8 +23,15 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import RoleOnboarding from "@/components/RoleOnboarding";
 import { getStaticSession } from "@/lib/staticAuth";
-import { MapView } from "@/components/Map";
-import { CircleMarker, MapContainer, TileLayer, useMapEvents } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
+import {
+  CircleMarker,
+  MapContainer,
+  Popup,
+  TileLayer,
+  Tooltip,
+  useMapEvents,
+} from "react-leaflet";
 import {
   addOfflineReport,
   citizenCopy,
@@ -56,6 +63,72 @@ function CitizenLocationPickerEvents({ onPick }: { onPick: (latitude: number, lo
 }
 function CitizenLocationPicker({ latitude, longitude, onPick }: { latitude: number; longitude: number; onPick: (latitude: number, longitude: number) => void }) {
   return <div className="pateros-location-picker"><div className="pateros-picker-label"><MapPin size={14} /> Pin the incident location inside Pateros</div><MapContainer center={[latitude, longitude]} zoom={14} minZoom={13} maxZoom={18} maxBounds={[[14.53, 121.05], [14.56, 121.09]]} maxBoundsViscosity={1} scrollWheelZoom className="pateros-picker-map"><TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" /><CitizenLocationPickerEvents onPick={onPick} /><CircleMarker center={[latitude, longitude]} radius={9} pathOptions={{ color: "#fff", weight: 3, fillColor: "#c85f5a", fillOpacity: 1 }} /></MapContainer><small>Selected coordinates: {latitude.toFixed(6)}, {longitude.toFixed(6)}</small></div>;
+}
+type CitizenCenterMapProps = {
+  centers: Array<{
+    name: string;
+    displayName?: string;
+    displayAddress?: string;
+    latitude: string | number;
+    longitude: string | number;
+  }>;
+  origin: { lat: number; lng: number } | null;
+  directionsLabel: string;
+};
+function CitizenCenterMap({ centers, origin, directionsLabel }: CitizenCenterMapProps) {
+  const positions = centers
+    .map(center => ({ lat: Number(center.latitude), lng: Number(center.longitude) }))
+    .filter(point => Number.isFinite(point.lat) && Number.isFinite(point.lng));
+  const southWest = {
+    lat: positions.length > 1 ? Math.min(...positions.map(point => point.lat)) : 14.53,
+    lng: positions.length > 1 ? Math.min(...positions.map(point => point.lng)) : 121.05,
+  };
+  const northEast = {
+    lat: positions.length > 1 ? Math.max(...positions.map(point => point.lat)) : 14.56,
+    lng: positions.length > 1 ? Math.max(...positions.map(point => point.lng)) : 121.09,
+  };
+  const fallbackCenter = positions[0] ?? { lat: 14.544, lng: 121.071 };
+  return (
+    <div className="citizen-map-wrap">
+      <MapContainer
+        className="citizen-map"
+        center={fallbackCenter}
+        zoom={positions.length === 1 ? 15 : 14}
+        bounds={[[southWest.lat, southWest.lng], [northEast.lat, northEast.lng]]}
+        scrollWheelZoom
+      >
+        <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+        {centers.map((center, index) => {
+          const lat = Number(center.latitude);
+          const lng = Number(center.longitude);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+          const label = String(center.displayName || center.name);
+          const href = getDirectionsUrl({ lat, lng }, origin || undefined);
+          return (
+            <CircleMarker
+              key={`${label}-${index}`}
+              center={[lat, lng]}
+              radius={10}
+              pathOptions={{ color: "#ffffff", weight: 3, fillColor: "#147d70", fillOpacity: 1 }}
+            >
+              <Tooltip direction="top" offset={[0, -8]}>
+                {label}
+              </Tooltip>
+              <Popup>
+                <strong>{label}</strong>
+                {center.displayAddress ? (
+                  <span className="citizen-map-popup-address">{String(center.displayAddress)}</span>
+                ) : null}
+                <a href={href} target="_blank" rel="noopener noreferrer">
+                  {directionsLabel}
+                </a>
+              </Popup>
+            </CircleMarker>
+          );
+        })}
+      </MapContainer>
+    </div>
+  );
 }
 const fallbackCenters: CitizenCenterRow[] = [
   {
@@ -197,10 +270,6 @@ export default function CitizenHome() {
   const t = citizenCopy[language];
   const speechLanguage = language === "fil" ? "fil-PH" : "en-PH";
   const offlineSyncingRef = useRef(false);
-  const mapRef = useRef<google.maps.Map | null>(null);
-  const directionsRendererRef = useRef<google.maps.DirectionsRenderer | null>(
-    null
-  );
   const displayCenters = useMemo(() => {
     const rows: CitizenCenterRow[] = centers?.length
       ? centers
@@ -395,35 +464,11 @@ export default function CitizenHome() {
       lat: Number(center.latitude),
       lng: Number(center.longitude),
     };
-    if (mapRef.current && window.google?.maps?.DirectionsService) {
-      const service = new window.google.maps.DirectionsService();
-      const renderer =
-        directionsRendererRef.current ||
-        new window.google.maps.DirectionsRenderer({ map: mapRef.current });
-      directionsRendererRef.current = renderer;
-      service.route(
-        {
-          origin: userLocation || mapRef.current.getCenter() || destination,
-          destination,
-          travelMode: window.google.maps.TravelMode.WALKING,
-        },
-        (result, status) => {
-          if (status === "OK" && result) renderer.setDirections(result);
-          else
-            window.open(
-              getDirectionsUrl(destination, userLocation || undefined),
-              "_blank",
-              "noopener,noreferrer"
-            );
-        }
-      );
-    } else {
-      window.open(
-        getDirectionsUrl(destination, userLocation || undefined),
-        "_blank",
-        "noopener,noreferrer"
-      );
-    }
+    window.open(
+      getDirectionsUrl(destination, userLocation || undefined),
+      "_blank",
+      "noopener,noreferrer"
+    );
   }
   function readPage() {
     const noAlert =
@@ -777,32 +822,16 @@ export default function CitizenHome() {
                     ? "Offline na mapa: ginagamit ang huling naka-save na listahan ng mga center."
                     : "Offline map: using the last saved center list."
                   : language === "fil"
-                    ? "Makikita ang mga center sa mapa. Pindutin ang Kumuha ng direksyon para sa ruta."
-                    : "See centers on the map. Choose Get directions for an in-app walking route."}
+                    ? "Makikita ang mga center sa mapa. Pindutin ang Kumuha ng direksyon para buksan ang ruta sa Google Maps."
+                    : "See centers on the map. Choose Get directions to open a walking route in Google Maps."}
               </p>
             </div>
           </div>
           {isOnline && (
-            <MapView
-              className="citizen-map"
-              initialCenter={{ lat: 14.544, lng: 121.071 }}
-              initialZoom={14}
-              onMapReady={map => {
-                mapRef.current = map;
-                if (window.google?.maps?.marker?.AdvancedMarkerElement)
-                  displayCenters.forEach(center => {
-                    const marker =
-                      new window.google.maps.marker.AdvancedMarkerElement({
-                        map,
-                        position: {
-                          lat: Number(center.latitude),
-                          lng: Number(center.longitude),
-                        },
-                        title: String(center.displayName),
-                      });
-                    marker.addListener("click", () => showDirections(center));
-                  });
-              }}
+            <CitizenCenterMap
+              centers={displayCenters}
+              origin={userLocation}
+              directionsLabel={t.directions}
             />
           )}
           {!isOnline && (
