@@ -2593,6 +2593,33 @@ function WorkspaceView({
             </p>
           )}
         </div>
+        {rolePrompt && (
+          <div className="modal-backdrop" onClick={() => setRolePrompt(null)}>
+            <form className="report-modal" onClick={event => event.stopPropagation()} onSubmit={event => {
+              event.preventDefault();
+              requestRoleChangeMutation.mutate({
+                userId: rolePrompt.userId,
+                role: rolePrompt.nextRole as "admin" | "staff" | "responder" | "citizen" | "user",
+                password: roleCredential,
+              });
+            }}>
+              <div className="modal-title"><div><span className="eyebrow">ROLE CHANGE PROTECTION</span><h2>Change {rolePrompt.name}'s role</h2></div><button type="button" onClick={() => setRolePrompt(null)}><X size={18} /></button></div>
+              <p className="modal-copy">
+                {rolePrompt.currentRole === "admin" || rolePrompt.nextRole === "admin"
+                  ? "Promotions to or from Administrator go through the role approval flow. If another administrator exists, this change is sent for their approval and only takes effect once they approve it."
+                  : "This role change is applied immediately, but you must confirm with your password first."}
+              </p>
+              <div className="role-change-before-after">
+                <Badge variant="outline">{formatRoleLabel(rolePrompt.currentRole)}</Badge>
+                <span aria-hidden="true">→</span>
+                <Badge>{formatRoleLabel(rolePrompt.nextRole)}</Badge>
+              </div>
+              <label>Confirm with your password<Input type="password" autoComplete="current-password" value={roleCredential} onChange={event => setRoleCredential(event.target.value)} placeholder="Your administrator password" required /></label>
+              {(roleFlowError || requestRoleChangeMutation.error) && <p className="login-error" role="alert">{roleFlowError || requestRoleChangeMutation.error?.message}</p>}
+              <div className="modal-actions"><Button type="button" variant="outline" onClick={() => setRolePrompt(null)}>Cancel</Button><Button type="submit" disabled={requestRoleChangeMutation.isPending || !roleCredential}>{requestRoleChangeMutation.isPending ? "Authorizing…" : "Authorize change"}</Button></div>
+            </form>
+          </div>
+        )}
       </section>
     );
   }
@@ -3078,33 +3105,6 @@ function WorkspaceView({
             <label>Minimum stock<Input type="number" min="0" value={editResourceMinimum} onChange={event => setEditResourceMinimum(event.target.value)} required /></label>
             {(resourceError || updateResourceMutation.error) && <p className="login-error" role="alert">{resourceError || updateResourceMutation.error?.message}</p>}
             <div className="modal-actions"><Button type="button" variant="outline" onClick={() => setEditingResource(null)}>Cancel</Button><Button type="submit" disabled={updateResourceMutation.isPending}>Save stock</Button></div>
-          </form>
-        </div>
-      )}
-      {rolePrompt && (
-        <div className="modal-backdrop" onClick={() => setRolePrompt(null)}>
-          <form className="report-modal" onClick={event => event.stopPropagation()} onSubmit={event => {
-            event.preventDefault();
-            requestRoleChangeMutation.mutate({
-              userId: rolePrompt.userId,
-              role: rolePrompt.nextRole as "admin" | "staff" | "responder" | "citizen" | "user",
-              password: roleCredential,
-            });
-          }}>
-            <div className="modal-title"><div><span className="eyebrow">ROLE CHANGE PROTECTION</span><h2>Change {rolePrompt.name}'s role</h2></div><button type="button" onClick={() => setRolePrompt(null)}><X size={18} /></button></div>
-            <p className="modal-copy">
-              {rolePrompt.currentRole === "admin" || rolePrompt.nextRole === "admin"
-                ? "Promotions to or from Administrator go through the role approval flow. If another administrator exists, this change is sent for their approval and only takes effect once they approve it."
-                : "This role change is applied immediately, but you must confirm with your password first."}
-            </p>
-            <div className="role-change-before-after">
-              <Badge variant="outline">{formatRoleLabel(rolePrompt.currentRole)}</Badge>
-              <span aria-hidden="true">→</span>
-              <Badge>{formatRoleLabel(rolePrompt.nextRole)}</Badge>
-            </div>
-            <label>Confirm with your password<Input type="password" autoComplete="current-password" value={roleCredential} onChange={event => setRoleCredential(event.target.value)} placeholder="Your administrator password" required /></label>
-            {(roleFlowError || requestRoleChangeMutation.error) && <p className="login-error" role="alert">{roleFlowError || requestRoleChangeMutation.error?.message}</p>}
-            <div className="modal-actions"><Button type="button" variant="outline" onClick={() => setRolePrompt(null)}>Cancel</Button><Button type="submit" disabled={requestRoleChangeMutation.isPending || !roleCredential}>{requestRoleChangeMutation.isPending ? "Authorizing…" : "Authorize change"}</Button></div>
           </form>
         </div>
       )}
