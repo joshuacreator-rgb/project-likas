@@ -22,6 +22,44 @@ export function canTransitionReport(current: ReportStatus, next: ReportStatus) {
   return current === next || transitions[current].includes(next);
 }
 
+export type AlertTargetAudience =
+  | "ALL_USERS"
+  | "CITIZENS"
+  | "STAFF"
+  | "RESPONDERS"
+  | "ADMIN";
+export type OperationalAlert = {
+  id: number;
+  title: string;
+  message: string;
+  alertType: string;
+  priority: string;
+  targetAudience: AlertTargetAudience;
+  isActive: boolean;
+  createdAt: Date | string;
+};
+
+/** Active alerts surfaced to a role: targeted audience plus public broadcasts. */
+export function alertsVisibleToRole<T extends OperationalAlert>(
+  alerts: T[] | undefined,
+  role: string | undefined
+): T[] {
+  const list = (alerts ?? []).filter(alert => alert.isActive !== false);
+  if (role === "responder")
+    return list.filter(
+      alert =>
+        alert.targetAudience === "RESPONDERS" ||
+        alert.targetAudience === "ALL_USERS"
+    );
+  if (role === "staff")
+    return list.filter(
+      alert =>
+        alert.targetAudience === "STAFF" ||
+        alert.targetAudience === "ALL_USERS"
+    );
+  return list; // admins see everything
+}
+
 export function resolveNotificationDelivery(config: { emailConfigured?: boolean; smsConfigured?: boolean }) {
   const channels = [config.emailConfigured ? "EMAIL" : null, config.smsConfigured ? "SMS" : null].filter(Boolean) as string[];
   return { channels: channels.length ? channels : ["IN_APP"], fallback: channels.length === 0 };

@@ -1,25 +1,52 @@
 import type {
   CitizenEmergencyNotification,
+  RealtimeAlert,
+  RealtimeAssignment,
   RealtimeStreamPayload,
 } from "../../shared/citizen";
+import { realtimeAudienceRoles } from "../../shared/citizen";
 
-type RealtimeSubscriber = (payload: RealtimeStreamPayload) => void;
+type RealtimeSubscriber = {
+  role: string;
+  handler: (payload: RealtimeStreamPayload) => void;
+};
 
 const subscribers = new Set<RealtimeSubscriber>();
 
-export function subscribeRealtime(subscriber: RealtimeSubscriber) {
-  subscribers.add(subscriber);
-  return () => subscribers.delete(subscriber);
+export function subscribeRealtime(
+  handler: (payload: RealtimeStreamPayload) => void,
+  role: string
+) {
+  const entry: RealtimeSubscriber = { role, handler };
+  subscribers.add(entry);
+  return () => subscribers.delete(entry);
+}
+
+function deliver(payload: RealtimeStreamPayload, roles?: readonly string[]) {
+  subscribers.forEach(({ role, handler }) => {
+    if (!roles || roles.includes("*") || roles.includes(role)) handler(payload);
+  });
 }
 
 export function broadcastIncident(incident: CitizenEmergencyNotification) {
-  subscribers.forEach(subscriber => {
-    subscriber({ type: "incident", data: incident });
-  });
+  // New citizen emergencies reach everyone: citizens for awareness, responders
+  // so they can act or claim, admin/staff for oversight.
+  deliver(
+    { type: "incident", data: incident },
+    ["citizen", "user", "responder", "staff", "admin"]
+  );
 }
 
-export function broadcastAlert(alert: unknown) {
-  subscribers.forEach(subscriber => {
-    subscriber({ type: "alert", data: alert });
-  });
+export function broadcastAlert(
+  alert: RealtimeAlert,
+  targetAudience: RealtimeAlert["targetAudience"] = "ALL_USERS"
+) {
+  deliver({ type: "alert", data: alert }, realtimeAudienceRoles(targetAudience));
+}
+
+export function broadcastAssignment(assignment: RealtimeAssignment) {
+  deliver(
+    { type: "assignment", data: assignment },
+    ["responder", "staff", "admin"]
+  );
 }

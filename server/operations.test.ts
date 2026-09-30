@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateCenterMetrics, canTransitionReport, getResourceStatus, resolveNotificationDelivery } from "../shared/operations";
+import { alertsVisibleToRole, calculateCenterMetrics, canTransitionReport, getResourceStatus, resolveNotificationDelivery } from "../shared/operations";
 
 describe("Project Likas operational rules", () => {
   it("prevents registration at a full center and calculates its occupancy", () => {
@@ -55,6 +55,19 @@ describe("Project Likas operational rules", () => {
     expect(canTransitionReport("IN_PROGRESS", "VERIFIED")).toBe(false);
     expect(canTransitionReport("IN_PROGRESS", "REJECTED")).toBe(false);
     expect(canTransitionReport("RESOLVED", "REJECTED")).toBe(false);
+  });
+
+  it("shows each role only its targeted alerts plus public broadcasts", () => {
+    const alerts = [
+      { id: 1, title: "Responder alert", message: "m", alertType: "T", priority: "HIGH", targetAudience: "RESPONDERS", isActive: true, createdAt: new Date() },
+      { id: 2, title: "Staff alert", message: "m", alertType: "T", priority: "MEDIUM", targetAudience: "STAFF", isActive: true, createdAt: new Date() },
+      { id: 3, title: "Public alert", message: "m", alertType: "T", priority: "LOW", targetAudience: "ALL_USERS", isActive: true, createdAt: new Date() },
+      { id: 4, title: "Ended alert", message: "m", alertType: "T", priority: "CRITICAL", targetAudience: "RESPONDERS", isActive: false, createdAt: new Date() },
+    ] as const;
+    expect(alertsVisibleToRole(alerts, "responder").map(a => a.id)).toEqual([1, 3]);
+    expect(alertsVisibleToRole(alerts, "staff").map(a => a.id)).toEqual([2, 3]);
+    expect(alertsVisibleToRole(alerts, "admin").map(a => a.id)).toEqual([1, 2, 3]);
+    expect(alertsVisibleToRole(undefined, "responder")).toEqual([]);
   });
 
   it("falls back to in-app delivery when providers are not configured", () => {

@@ -34,6 +34,7 @@ import {
   getOperationsSummary,
   getPublicSmsSettings,
   getEvacueeById,
+  getAlertById,
   getResourceById,
   getRiskReportById,
   getSettings,
@@ -81,7 +82,7 @@ import {
   getUserByEmail,
   verifyUserTotp,
 } from "./db";
-import { broadcastAlert, broadcastIncident } from "./_core/realtime";
+import { broadcastAlert, broadcastAssignment, broadcastIncident } from "./_core/realtime";
 import { toCitizenEmergencyNotification } from "../shared/citizen";
 
 const allowedRoles = [
@@ -592,7 +593,8 @@ export const appRouter = router({
               targetAudience: "RESPONDERS",
               createdBy: ctx.user.id,
             });
-            broadcastAlert(responderAlert);
+            const alert = await getAlertById(responderAlert.id);
+            if (alert) broadcastAlert(alert, alert.targetAudience);
           } catch (error) {
             console.warn("[Operations] Citizen emergency notification failed:", error);
           }
@@ -703,6 +705,7 @@ export const appRouter = router({
           entityType: "risk_report",
           entityId: input.reportId,
         });
+        broadcastAssignment({ reportId: input.reportId, assignedResponderId: input.responderId });
         return { reportId: input.reportId, assignedResponderId: input.responderId };
       }),
     claimIncident: roleProcedure(["responder"])
@@ -722,12 +725,15 @@ export const appRouter = router({
           entityType: "risk_report",
           entityId: input.reportId,
         });
+        broadcastAssignment({ reportId: input.reportId, assignedResponderId: ctx.user.id });
         return { reportId: input.reportId, assignedResponderId: ctx.user.id };
       }),
     alerts: roleProcedure(allowedRoles).query(() => listAlerts()),
     notifyResponders: roleProcedure(["admin", "staff", "responder"]).input(z.object({ incidentId: z.string().min(1), incidentType: z.string().min(2), location: z.string().min(2), priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]) })).mutation(async ({ ctx, input }) => {
       const result = await createAlert({ title: `${input.priority} incident: ${input.incidentType}`, message: `${input.incidentId} requires responder attention at ${input.location}.`, alertType: "INCIDENT_ASSIGNMENT", priority: input.priority, targetAudience: "RESPONDERS", createdBy: ctx.user.id });
       await logActivity({ actorId: ctx.user.id, action: "NOTIFY_RESPONDERS", entityType: "risk_report", metadata: JSON.stringify({ incidentId: input.incidentId, alertId: result.id }) });
+      const notifyAlert = await getAlertById(result.id);
+      if (notifyAlert) broadcastAlert(notifyAlert, notifyAlert.targetAudience);
       return result;
     }),
     weather: roleProcedure(allowedRoles).query(() => getWeatherSnapshot()),
@@ -989,6 +995,8 @@ export const appRouter = router({
           entityType: "alert",
           entityId: result.id,
         });
+        const createdAlert = await getAlertById(result.id);
+        if (createdAlert) broadcastAlert(createdAlert, createdAlert.targetAudience);
         return result;
       }),
     updateSetting: adminProcedure

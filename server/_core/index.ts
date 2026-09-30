@@ -68,8 +68,12 @@ async function startServer() {
   // SSE endpoint for real-time push to connected clients
   app.get("/api/stream", async (req, res) => {
     const user = await authenticateRequest(req);
-    if (!user || (user.role !== "citizen" && user.role !== "user")) {
-      res.status(user ? 403 : 401).end();
+    if (!user) {
+      res.status(401).end();
+      return;
+    }
+    if (user.role !== "citizen" && user.role !== "user" && user.role !== "responder" && user.role !== "staff" && user.role !== "admin") {
+      res.status(403).end();
       return;
     }
 
@@ -93,7 +97,7 @@ async function startServer() {
         return;
       }
     }, 25000);
-    const unsubscribe = subscribeRealtime(handler);
+    const unsubscribe = subscribeRealtime(handler, user.role);
     const cleanup = () => {
       clearInterval(heartbeat);
       unsubscribe();

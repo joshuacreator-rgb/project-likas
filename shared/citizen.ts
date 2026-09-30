@@ -9,13 +9,54 @@ export type CitizenEmergencyNotification = {
   longitude: string | number | null;
   priority: CitizenEmergencyPriority;
   createdAt: Date | string;
+  status?: string;
+  assignedResponderId?: number | null;
+};
+export type RealtimeAlert = {
+  id: number;
+  title: string;
+  message: string;
+  alertType: string;
+  priority: CitizenEmergencyPriority;
+  targetAudience:
+    | "ALL_USERS"
+    | "CITIZENS"
+    | "STAFF"
+    | "RESPONDERS"
+    | "ADMIN";
+  isActive: boolean;
+  createdAt: Date | string;
+};
+export type RealtimeAssignment = {
+  reportId: number;
+  assignedResponderId: number | null;
 };
 export type RealtimeStreamPayload =
   | { type: "connected" }
   | { type: "incident"; data: CitizenEmergencyNotification }
-  | { type: "alert"; data: unknown };
+  | { type: "alert"; data: RealtimeAlert }
+  | { type: "assignment"; data: RealtimeAssignment };
 
 import { getRiskReportHeadline } from "./operations";
+
+export function realtimeAudienceRoles(
+  audience: RealtimeAlert["targetAudience"]
+): readonly string[] {
+  switch (audience) {
+    case "ALL_USERS":
+      return ["citizen", "user", "responder", "staff", "admin"];
+    case "CITIZENS":
+      return ["citizen", "user"];
+    case "RESPONDERS":
+      return ["responder"];
+    case "STAFF":
+      return ["staff"];
+    case "ADMIN":
+      return ["admin"];
+    default:
+      return [];
+  }
+}
 
 export function toCitizenEmergencyNotification(report: {
   id: number;
@@ -27,6 +68,8 @@ export function toCitizenEmergencyNotification(report: {
   longitude: string | number | null | undefined;
   priority: CitizenEmergencyPriority;
   createdAt: Date | string;
+  status?: string;
+  assignedResponderId?: number | null;
 }): CitizenEmergencyNotification {
   return {
     id: report.id,
@@ -37,6 +80,8 @@ export function toCitizenEmergencyNotification(report: {
     longitude: report.longitude ?? null,
     priority: report.priority,
     createdAt: report.createdAt,
+    status: report.status,
+    assignedResponderId: report.assignedResponderId ?? null,
   };
 }
 export const citizenCopy = {

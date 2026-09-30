@@ -60,7 +60,9 @@ import {
   getLoginPath,
   getRegisterPath,
 } from "../../../shared/roles";
-import { canTransitionReport, type ReportStatus } from "../../../shared/operations";
+import { canTransitionReport, alertsVisibleToRole, type ReportStatus } from "../../../shared/operations";
+import type { RealtimeStreamPayload } from "../../../shared/citizen";
+import { toast } from "sonner";
 import CitizenHome from "./CitizenHome";
 import RoleOnboarding from "@/components/RoleOnboarding";
 import {
@@ -352,6 +354,49 @@ export default function Home() {
     enabled: Boolean(user),
     refetchInterval: 1500,
   });
+  const alertsForRole = alertsVisibleToRole(liveAlerts, user?.role);
+  useEffect(() => {
+    if (
+      !user ||
+      staticSession ||
+      (user.role !== "responder" && user.role !== "staff" && user.role !== "admin") ||
+      typeof EventSource === "undefined"
+    )
+      return;
+    const source = new EventSource("/api/stream");
+    source.onmessage = event => {
+      let payload: RealtimeStreamPayload;
+      try {
+        payload = JSON.parse(event.data) as RealtimeStreamPayload;
+      } catch {
+        return;
+      }
+      if (payload.type === "connected") return;
+      if (payload.type === "incident") {
+        toast(payload.data.reportType, {
+          description: `${payload.data.location} · ${payload.data.priority} priority`,
+          duration: 10000,
+        });
+        utils.operations.reports.invalidate();
+        utils.operations.summary.invalidate();
+      } else if (payload.type === "alert") {
+        toast(payload.data.title, {
+          description: payload.data.message,
+          duration: 12000,
+        });
+        utils.operations.alerts.invalidate();
+      } else if (payload.type === "assignment") {
+        if (user.role === "responder" && payload.data.assignedResponderId === user.id) {
+          toast("You've been assigned an incident", {
+            description: "Open Risk reports to view it.",
+            duration: 10000,
+          });
+        }
+        utils.operations.reports.invalidate();
+      }
+    };
+    return () => source.close();
+  }, [user, staticSession, utils]);
   const isResponder = user?.role === "responder";
   const { data: responderRiskReports } = trpc.operations.reports.useQuery(undefined, {
     enabled: isResponder && !staticSession,
@@ -424,6 +469,7 @@ export default function Home() {
         { label: "Resources", icon: Package },
         { label: "Incident map", icon: MapIcon },
         { label: "Risk reports", icon: AlertTriangle },
+        { label: "Alerts", icon: Bell },
         { label: "User & roles", icon: UserCog },
       ]
     : user?.role === "responder"
@@ -431,6 +477,7 @@ export default function Home() {
           { label: "Overview", icon: LayoutDashboard },
           { label: "Incident map", icon: MapIcon },
           { label: "Risk reports", icon: AlertTriangle },
+          { label: "Alerts", icon: Bell },
         ]
       : user?.role === "staff"
         ? [
@@ -438,6 +485,7 @@ export default function Home() {
             { label: "Evacuation centers", icon: Building2 },
             { label: "Evacuees", icon: Users },
             { label: "Resources", icon: Package },
+            { label: "Alerts", icon: Bell },
           ]
       : [
           { label: "Overview", icon: LayoutDashboard },
@@ -544,7 +592,7 @@ export default function Home() {
             >
               <Icon size={18} />
               <span>{label}</span>
-              {label === "Alerts" && <em>4</em>}
+              {label === "Alerts" && alertsForRole.length > 0 && <em>{alertsForRole.length}</em>}
             </button>
           ))}
         </nav>
@@ -1079,39 +1127,32 @@ export default function Home() {
                   <h2>Alert center</h2>
                   <p>Targeted operational notifications</p>
                 </div>
-                <span className="alert-count">4 new</span>
+                <span className="alert-count">{alertsForRole.length} active</span>
               </div>
               <div className="alert-list">
-                <div className="alert-item critical">
-                  <div className="alert-symbol">
-                    <Waves size={17} />
+                {alertsForRole.slice(0, 5).map(alert => (
+                  <div className={`alert-item${alert.priority === "CRITICAL" || alert.priority === "HIGH" ? " critical" : ""}`} key={alert.id}>
+                    <div className="alert-symbol">
+                      <AlertTriangle size={17} />
+                    </div>
+                    <div>
+                      <strong>{alert.title}</strong>
+                      <p>{alert.message}</p>
+                      <small>{new Date(alert.createdAt).toLocaleString()}</small>
+                    </div>
                   </div>
-                  <div>
-                    <strong>Flood warning · Sta. Ana</strong>
-                    <p>Water level rising near C-5. Responder team notified.</p>
-                    <small>8 min ago</small>
+                ))}
+                {alertsForRole.length === 0 && (
+                  <div className="alert-item">
+                    <div className="alert-symbol">
+                      <ShieldCheck size={17} />
+                    </div>
+                    <div>
+                      <strong>No active alerts</strong>
+                      <p>Your team has no open notifications right now.</p>
+                    </div>
                   </div>
-                </div>
-                <div className="alert-item">
-                  <div className="alert-symbol">
-                    <Droplets size={17} />
-                  </div>
-                  <div>
-                    <strong>Water stock replenished</strong>
-                    <p>500L delivered to Rizal Tolentino Center.</p>
-                    <small>42 min ago</small>
-                  </div>
-                </div>
-                <div className="alert-item">
-                  <div className="alert-symbol">
-                    <LifeBuoy size={17} />
-                  </div>
-                  <div>
-                    <strong>Team Alpha en route</strong>
-                    <p>Assigned to incident RPT-2407.</p>
-                    <small>1 hr ago</small>
-                  </div>
-                </div>
+                )}
               </div>
               <button
                 className="panel-footer-action"
@@ -1425,6 +1466,8 @@ function WorkspaceView({
   const { user } = useAuth();
   const utils = trpc.useUtils();
   const { data: liveResources } = trpc.operations.resources.useQuery({}, { enabled: active === "Resources" && !isStaticSession() });
+  const { data: workspaceAlerts } = trpc.operations.alerts.useQuery(undefined, { enabled: active === "Alerts" && !isStaticSession() });
+  const workspaceAlertsForRole = alertsVisibleToRole(workspaceAlerts, user?.role);
   const [staticReports, setStaticReports] = useState<WorkspaceReport[]>(readStaticReports);
   useEffect(() => {
     const refreshReports = () => setStaticReports(readStaticReports());
@@ -1496,9 +1539,9 @@ function WorkspaceView({
   >("ALL");
   const [demoSearch, setDemoSearch] = useState("");
   const allowedWorkspaces: Record<string, string[]> = {
-    admin: ["Evacuation centers", "Evacuees", "Resources", "Incident map", "Risk reports", "Activity log", "Settings", "User & roles"],
-    staff: ["Overview", "Evacuation centers", "Evacuees", "Resources"],
-    responder: ["Overview", "Incident map", "Risk reports"],
+    admin: ["Evacuation centers", "Evacuees", "Resources", "Incident map", "Risk reports", "Alerts", "Activity log", "Settings", "User & roles"],
+    staff: ["Overview", "Evacuation centers", "Evacuees", "Resources", "Alerts"],
+    responder: ["Overview", "Incident map", "Risk reports", "Alerts"],
   };
   const inviteMutation = trpc.admin.createInvitation.useMutation({
     onSuccess: () => {
@@ -1563,6 +1606,12 @@ function WorkspaceView({
   const updateResourceMutation = trpc.admin.updateResource.useMutation({ onSuccess: () => { setEditingResource(null); utils.operations.resources.invalidate(); } });
   const removeResourceMutation = trpc.admin.removeResource.useMutation({ onSuccess: () => utils.operations.resources.invalidate() });
   const registerEvacueeMutation = trpc.operations.registerEvacuee.useMutation({ onSuccess: () => { setRecordOpen(false); } });
+  const [alertForm, setAlertForm] = useState({ title: "", message: "", alertType: "GENERAL_UPDATE", priority: "MEDIUM" as "LOW" | "MEDIUM" | "HIGH" | "CRITICAL", targetAudience: "ALL_USERS" as "ALL_USERS" | "CITIZENS" | "STAFF" | "RESPONDERS" | "ADMIN" });
+  const createAlertMutation = trpc.admin.createAlert.useMutation({ onSuccess: () => { setRecordOpen(false); utils.operations.alerts.invalidate(); } });
+  function submitAlert(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    createAlertMutation.mutate({ title: alertForm.title, message: alertForm.message, alertType: alertForm.alertType, priority: alertForm.priority, targetAudience: alertForm.targetAudience });
+  }
   const canAddRecord = (user?.role === "admin" && (active === "Evacuation centers" || active === "Resources")) || ((user?.role === "staff") && (active === "Evacuation centers" || active === "Evacuees" || active === "Resources"));
   const recordTitle = active === "Evacuation centers" ? "Add evacuation center" : active === "Resources" ? "Add resource" : "Register evacuee";
   function closeRecordForm() {
@@ -1681,7 +1730,7 @@ function WorkspaceView({
       title: "Alert center",
       description:
         "Target audiences, urgency, and fallback delivery status for each operational alert.",
-      columns: ["Alert", "Audience", "Priority", "Delivery"],
+      columns: ["Alert", "Audience", "Priority", "Status"],
       rows: [
         ["Flood warning · Sta. Ana", "ALL USERS", "CRITICAL", "IN-APP · SENT"],
         ["Water stock replenished", "STAFF", "MEDIUM", "IN-APP · SENT"],
@@ -1757,6 +1806,8 @@ function WorkspaceView({
       ? visibleResourceRows.map(resource => [resource.name, `${resource.quantity} ${resource.unit}`, resource.status])
     : active === "Risk reports" && liveReports !== undefined
       ? (filteredLiveReports ?? []).map(report => [report.reportCode, report.reportType, report.location, report.status])
+      : active === "Alerts" && workspaceAlerts !== undefined
+        ? workspaceAlertsForRole.map(alert => [alert.title, alert.targetAudience, alert.priority, alert.isActive ? "ACTIVE" : "ENDED"])
       : view.rows.filter(row => !normalizedSearch || row.some(cell => cell.toLowerCase().includes(normalizedSearch)));
   const tableColumns = active === "Evacuation centers" || active === "Resources" ? [...view.columns, "Actions"] : view.columns;
   const reportDestinations = active === "Risk reports" && liveReports !== undefined
@@ -2350,12 +2401,13 @@ function WorkspaceView({
         </div>
         <div className="workspace-actions">
           <Button variant="outline" onClick={exportView}>Export view</Button>
-          <Button
-            disabled={!canAddRecord && active !== "Alerts"}
-            onClick={() => setRecordOpen(true)}
-          >
-            {active === "Alerts" ? <><Bell size={15} /> Create alert</> : <>Add record</>}
-          </Button>
+          {active === "Alerts"
+            ? user?.role === "admin" && (
+                <Button onClick={() => setRecordOpen(true)}>
+                  <Bell size={15} /> Create alert
+                </Button>
+              )
+            : <Button disabled={!canAddRecord} onClick={() => setRecordOpen(true)}>Add record</Button>}
         </div>
       </div>
       <div className="workspace-table-wrap">
@@ -2452,6 +2504,20 @@ function WorkspaceView({
             </>}
             {(recordError || createCenterMutation.error || createResourceMutation.error || registerEvacueeMutation.error) && <p className="login-error" role="alert">{recordError || createCenterMutation.error?.message || createResourceMutation.error?.message || registerEvacueeMutation.error?.message}</p>}
             <div className="modal-actions"><Button type="button" variant="outline" onClick={closeRecordForm}>Cancel</Button><Button type="submit" disabled={createCenterMutation.isPending || createResourceMutation.isPending || registerEvacueeMutation.isPending}>Save record</Button></div>
+          </form>
+        </div>
+      )}
+      {recordOpen && active === "Alerts" && user?.role === "admin" && (
+        <div className="modal-backdrop" onClick={() => setRecordOpen(false)}>
+          <form className="report-modal" onClick={event => event.stopPropagation()} onSubmit={submitAlert}>
+            <div className="modal-title"><div><span className="eyebrow">BROADCAST CONTROL</span><h2>Create alert</h2></div><button type="button" onClick={() => setRecordOpen(false)}><X size={18} /></button></div>
+            <label>Title<Input value={alertForm.title} onChange={event => setAlertForm(previous => ({ ...previous, title: event.target.value }))} placeholder="Flood warning · Sta. Ana" required minLength={3} /></label>
+            <label>Message<Input value={alertForm.message} onChange={event => setAlertForm(previous => ({ ...previous, message: event.target.value }))} placeholder="Water level rising near C-5." required minLength={5} /></label>
+            <label>Type<Input value={alertForm.alertType} onChange={event => setAlertForm(previous => ({ ...previous, alertType: event.target.value }))} placeholder="FLOOD_WARNING" required minLength={2} /></label>
+            <label>Priority<select className="role-select" value={alertForm.priority} onChange={event => setAlertForm(previous => ({ ...previous, priority: event.target.value as typeof alertForm.priority }))}><option value="LOW">LOW</option><option value="MEDIUM">MEDIUM</option><option value="HIGH">HIGH</option><option value="CRITICAL">CRITICAL</option></select></label>
+            <label>Audience<select className="role-select" value={alertForm.targetAudience} onChange={event => setAlertForm(previous => ({ ...previous, targetAudience: event.target.value as typeof alertForm.targetAudience }))}><option value="ALL_USERS">All users</option><option value="CITIZENS">Citizens</option><option value="STAFF">Staff</option><option value="RESPONDERS">Responders</option><option value="ADMIN">Admins only</option></select></label>
+            {createAlertMutation.error && <p className="login-error" role="alert">{createAlertMutation.error.message}</p>}
+            <div className="modal-actions"><Button type="button" variant="outline" onClick={() => setRecordOpen(false)}>Cancel</Button><Button type="submit" disabled={createAlertMutation.isPending || !alertForm.title.trim() || !alertForm.message.trim()}>{createAlertMutation.isPending ? "Broadcasting…" : "Broadcast alert"}</Button></div>
           </form>
         </div>
       )}

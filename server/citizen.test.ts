@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addOfflineReport, distanceKm, getDirectionsUrl, getSmsFallbackUrl, normalizeSmsConfiguration, parseOfflineReports, projectOfflineMapPoint, serializeOfflineReport } from "../shared/citizen";
+import { addOfflineReport, distanceKm, getDirectionsUrl, getSmsFallbackUrl, normalizeSmsConfiguration, parseOfflineReports, projectOfflineMapPoint, realtimeAudienceRoles, serializeOfflineReport } from "../shared/citizen";
 
 describe("citizen mobility and offline utilities", () => {
   it("calculates a positive distance between two center coordinates", () => {
@@ -35,5 +35,12 @@ describe("citizen mobility and offline utilities", () => {
   });
   it("normalizes the official SMS destination and provider setting", () => {
     expect(normalizeSmsConfiguration({ officialNumber: "+63 917-123-4567", provider: "TWILIO" })).toEqual({ officialNumber: "+639171234567", provider: "TWILIO" });
+  });
+  it("routes realtime alert audiences to exactly the target roles", () => {
+    expect(realtimeAudienceRoles("RESPONDERS")).toEqual(["responder"]);
+    expect(realtimeAudienceRoles("STAFF")).toEqual(["staff"]);
+    expect(realtimeAudienceRoles("ADMIN")).toEqual(["admin"]);
+    expect(realtimeAudienceRoles("CITIZENS")).toEqual(["citizen", "user"]);
+    expect(realtimeAudienceRoles("ALL_USERS")).toEqual(["citizen", "user", "responder", "staff", "admin"]);
   });
 });
