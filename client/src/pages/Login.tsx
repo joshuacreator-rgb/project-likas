@@ -21,6 +21,45 @@ const internalLoginLabels: Record<InternalLoginRole, string> = {
   responder: "Responder / Disaster Team",
 };
 
+const internalBrief: Record<
+  InternalLoginRole,
+  { topline: string; title: string; description: string; points: string[] }
+> = {
+  admin: {
+    topline: "Admin",
+    title: "Emergency Operations Command",
+    description:
+      "Configure the system, manage staff and responders, and keep operations running from one command center.",
+    points: [
+      "Manage users, roles, and access",
+      "Oversee emergency operations",
+      "Monitor system activity and reports",
+    ],
+  },
+  staff: {
+    topline: "Staff",
+    title: "Evacuation Center Operations",
+    description:
+      "Coordinate evacuation centers, track resources and capacity, and support families in your care.",
+    points: [
+      "Manage evacuation center operations",
+      "Track resources and capacity",
+      "Support displaced families",
+    ],
+  },
+  responder: {
+    topline: "Responder",
+    title: "Disaster Response Coordination",
+    description:
+      "Receive deployments, report field status, and coordinate with your response team in real time.",
+    points: [
+      "Receive and manage deployments",
+      "Report field status in real time",
+      "Coordinate your response team",
+    ],
+  },
+};
+
 function resolveInternalRole(): InternalLoginRole {
   if (typeof window === "undefined") return "admin";
   const path = window.location.pathname;
@@ -219,6 +258,7 @@ export function InternalLogin({
   const [showPassword, setShowPassword] = useState(false);
   const [challengeToken, setChallengeToken] = useState("");
   const [twoFactorCode, setTwoFactorCode] = useState("");
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
 
   const markAuthenticated = () => {
     sessionStorage.setItem("likas-login-complete", "true");
@@ -259,8 +299,42 @@ export function InternalLogin({
 
   return (
     <main className="login-page internal-login-page">
-      <div className="login-layout single-column-layout">
-        <section className="login-card internal-login-card">
+      <div className="login-layout">
+        <aside className="login-brief">
+          <div className="login-brief-topline"><span className="login-live-dot" /> {internalBrief[role].topline} access</div>
+          <div className="login-brief-icon"><ShieldCheck size={28} /></div>
+          <div>
+            <span className="eyebrow">Project Likas</span>
+            <h2>{internalBrief[role].title}</h2>
+            <p>{internalBrief[role].description}</p>
+          </div>
+          <div className="login-brief-list">
+            {internalBrief[role].points.map((point) => (
+              <div key={point}><span className="list-pill">•</span> {point}</div>
+            ))}
+          </div>
+          <div className="login-brief-footer"><ShieldCheck size={16} /><span>Secured access for authorized personnel only.</span></div>
+        </aside>
+
+        <section className="login-card">
+          <div className="login-brand">
+            <div className="brand-mark"><ShieldCheck size={26} /></div>
+            <div>
+              <strong>PROJECT LIKAS</strong>
+              <span>Disaster Response &amp; Community Safety</span>
+            </div>
+          </div>
+
+          <div className="login-heading">
+            <span className="eyebrow">{isTwoFactorStep ? "Confirm identity" : `${internalLoginLabels[role]} access`}</span>
+            <h1>{isTwoFactorStep ? "Enter your security code." : "Welcome back."}</h1>
+            <p>
+              {isTwoFactorStep
+                ? "Open your authenticator app and enter the 6-digit code to continue."
+                : "Sign in to manage evacuation, response, and recovery operations for your community."}
+            </p>
+          </div>
+
           <form
             className="login-form"
             aria-busy={isSubmitting}
@@ -369,6 +443,12 @@ export function InternalLogin({
               </div>
             )}
 
+            {!isTwoFactorStep && (
+              <div className="account-links align-right">
+                <button type="button" onClick={() => setRecoveryOpen(true)}>Forgot password?</button>
+              </div>
+            )}
+
             <Button
               type="submit"
               disabled={isSubmitting || (isTwoFactorStep && twoFactorCode.length !== 6)}
@@ -395,6 +475,8 @@ export function InternalLogin({
           )}
         </section>
       </div>
+
+      {recoveryOpen && <PasswordRecovery embedded onClose={() => setRecoveryOpen(false)} />}
     </main>
   );
 }
