@@ -300,7 +300,8 @@ export default function Home() {
   const [incidentFilter, setIncidentFilter] = useState("All");
   const [mapFilter, setMapFilter] = useState("All");
   const [submitted, setSubmitted] = useState(false);
-  const [evidenceName, setEvidenceName] = useState("");
+  const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
+  const [evidenceError, setEvidenceError] = useState("");
   const [selectedIncident, setSelectedIncident] = useState<IncidentSummary | null>(null);
   const [selectedIncidentReportId, setSelectedIncidentReportId] = useState<number | null>(null);
   const [responderNotified, setResponderNotified] = useState(false);
@@ -334,6 +335,9 @@ export default function Home() {
     { enabled: selectedIncidentReportId !== null && !isStaticSession() }
   );
   const utils = trpc.useUtils();
+  const uploadEvidenceMutation = trpc.operations.uploadEvidence.useMutation({
+    onSuccess: () => utils.operations.reports.invalidate(),
+  });
   const createReportMutation = trpc.operations.createRiskReport.useMutation({
     onSuccess: () => setSubmitted(true),
   });
@@ -612,7 +616,7 @@ export default function Home() {
     });
   }
 
-  function submitReport() {
+  async function submitReport() {
     if (!reportType.trim() || !reportLocation.trim() || !reportDescription.trim()) return;
     if (isStaticSession()) {
       const reports = JSON.parse(localStorage.getItem("likas-static-reports") || "[]");
@@ -631,15 +635,29 @@ export default function Home() {
       setSubmitted(true);
       return;
     }
-    createReportMutation.mutate({
-      reportCode: `RPT-${Date.now().toString(36).toUpperCase()}`,
-      reportType,
-      location: reportLocation,
-      priority: reportPriority,
-      description: reportDescription,
-      latitude: Number(reportLatitude),
-      longitude: Number(reportLongitude),
-    });
+    try {
+      const created = await createReportMutation.mutateAsync({
+        reportCode: `RPT-${Date.now().toString(36).toUpperCase()}`,
+        reportType,
+        location: reportLocation,
+        priority: reportPriority,
+        description: reportDescription,
+        latitude: Number(reportLatitude),
+        longitude: Number(reportLongitude),
+      });
+      setSubmitted(true);
+      if (evidenceFile && created?.id != null) {
+        const dataBase64 = await readFileAsDataURL(evidenceFile);
+        uploadEvidenceMutation.mutate({
+          reportId: created.id,
+          fileName: evidenceFile.name,
+          mimeType: evidenceFile.type || "application/octet-stream",
+          dataBase64,
+        });
+      }
+    } catch {
+      // createReportMutation.error is rendered beside the submit button
+    }
   }
 
   if (isCitizen) return <CitizenHome />;
@@ -1500,6 +1518,15 @@ export default function Home() {
                   Your report has been logged and is now visible to the response
                   desk.
                 </p>
+                {uploadEvidenceMutation.isPending && (
+                  <p className="modal-copy">Uploading evidence…</p>
+                )}
+                {uploadEvidenceMutation.error && (
+                  <p className="login-error" role="alert">
+                    Report submitted, but the attachment could not be uploaded:{" "}
+                    {uploadEvidenceMutation.error.message}
+                  </p>
+                )}
                 <Button onClick={() => setReportOpen(false)}>
                   Return to operations
                 </Button>
@@ -1533,11 +1560,41 @@ export default function Home() {
                   <input
                     type="file"
                     accept="image/*,application/pdf"
-                    onChange={e =>
-                      setEvidenceName(e.target.files?.[0]?.name || "")
-                    }
+                    onChange={e => {
+                      const file = e.target.files?.[0] ?? null;
+                      setEvidenceError("");
+                      if (file) {
+                        const isSupported =
+                          file.type.startsWith("image/") ||
+                          file.type === "application/pdf";
+                        if (!isSupported) {
+                          setEvidenceError(
+                            "Only image or PDF files are accepted."
+                          );
+                          setEvidenceFile(null);
+                          e.target.value = "";
+                          return;
+                        }
+                        if (file.size > 10_000_000) {
+                          setEvidenceError(
+                            "Evidence files must be 10 MB or smaller."
+                          );
+                          setEvidenceFile(null);
+                          e.target.value = "";
+                          return;
+                        }
+                      }
+                      setEvidenceFile(file);
+                    }}
                   />
-                  {evidenceName && <small>Selected: {evidenceName}</small>}
+                  {evidenceFile && (
+                    <small>Selected: {evidenceFile.name}</small>
+                  )}
+                  {evidenceError && (
+                    <span className="login-error" role="alert">
+                      {evidenceError}
+                    </span>
+                  )}
                 </label>
                 <div className="modal-actions">
                   <Button
@@ -1558,6 +1615,15 @@ export default function Home() {
       )}
     </div>
   );
+}
+
+function readFileAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
 }
 
 type DemoAccountRecord = {

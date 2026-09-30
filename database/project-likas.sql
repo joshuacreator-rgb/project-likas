@@ -191,6 +191,17 @@ CREATE TABLE IF NOT EXISTS `evidence_files` (
   CONSTRAINT `evidence_files_reportId_risk_reports_id_fk` FOREIGN KEY (`reportId`) REFERENCES `risk_reports` (`id`)
 );
 
+CREATE TABLE IF NOT EXISTS `weather_snapshots` (
+  `id` int AUTO_INCREMENT NOT NULL,
+  `location` varchar(120) NOT NULL,
+  `temperatureC` decimal(5,2),
+  `condition` varchar(100),
+  `warning` text,
+  `provider` varchar(80),
+  `observedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+);
+
 CREATE TABLE IF NOT EXISTS `responder_actions` (
   `id` int AUTO_INCREMENT NOT NULL,
   `reportId` int NOT NULL,
@@ -238,4 +249,21 @@ CREATE TABLE IF NOT EXISTS `report_exports` (
   `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   CONSTRAINT `report_exports_requestedBy_users_id_fk` FOREIGN KEY (`requestedBy`) REFERENCES `users` (`id`)
+);
+
+CREATE TABLE IF NOT EXISTS `role_change_requests` (
+  `id` int AUTO_INCREMENT NOT NULL,
+  `requesterId` int NOT NULL,
+  `approverId` int,
+  `userId` int NOT NULL,
+  `fromRole` enum('user','admin','staff','responder','citizen') NOT NULL,
+  `toRole` enum('user','admin','staff','responder','citizen') NOT NULL,
+  `status` enum('PENDING','APPROVED','REJECTED','EXPIRED') NOT NULL DEFAULT 'PENDING',
+  `expiresAt` timestamp NOT NULL,
+  `decidedAt` timestamp NULL,
+  `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  CONSTRAINT `role_change_requests_requesterId_users_id_fk` FOREIGN KEY (`requesterId`) REFERENCES `users` (`id`),
+  CONSTRAINT `role_change_requests_approverId_users_id_fk` FOREIGN KEY (`approverId`) REFERENCES `users` (`id`),
+  CONSTRAINT `role_change_requests_userId_users_id_fk` FOREIGN KEY (`userId`) REFERENCES `users` (`id`)
 );
