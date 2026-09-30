@@ -1,10 +1,10 @@
-import { eq, sql, and, desc, inArray, isNull, gt } from "drizzle-orm";
+import { eq, sql, and, desc, inArray, isNull, gt, or } from "drizzle-orm";
 import { compare, hash } from "bcryptjs";
 import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import { generateResetToken, hashResetToken, verifyResetToken } from "./resetTokens";
 import { createTotpUri, generateTotpSecret, verifyTotpCode } from "./totp";
 import { drizzle } from "drizzle-orm/mysql2";
-import { activityLogs, alerts, authCredentials, centerStaff, evidenceFiles, evacuationCenters, invitations, evacuees, InsertUser, resources, resourceTransactions, responderActions, reportExports, riskReports, systemSettings, users, weatherSnapshots } from "../drizzle/schema";
+import { activityLogs, alerts, authCredentials, centerStaff, evidenceFiles, evacuationCenters, invitations, evacuees, InsertUser, resources, resourceTransactions, responderActions, reportExports, riskReports, roleChangeRequests, systemSettings, users, weatherSnapshots } from "../drizzle/schema";
 import { getResourceStatus, resolveNotificationDelivery } from "../shared/operations";
 import { ENV } from "./_core/env";
 import { storagePut } from "./storage";
@@ -49,6 +49,12 @@ export async function disableTwoFactor(userId: number) { const user = await getU
 export async function verifyUserTotp(userId: number, code: string) { const user = await getUserById(userId); return Boolean(user && user.twoFactorEnabled && user.role === "responder" && verifyTotpCode(user.twoFactorSecret, code)); }
 export async function updateUserRole(userId: number, role: "admin" | "staff" | "responder" | "citizen" | "user") { const db = await getDb(); if (!db) throw new Error("Database unavailable"); await db.update(users).set({ role }).where(eq(users.id, userId)); return { userId, role }; }
 export async function updateUserApproval(userId: number, accountStatus: "APPROVED" | "REJECTED") { const db = await getDb(); if (!db) throw new Error("Database unavailable"); const target = await getUserById(userId); if (!target || target.role !== "citizen") throw new Error("Only citizen registrations can be approved or declined"); await db.update(users).set({ accountStatus }).where(eq(users.id, userId)); return { userId, accountStatus }; }
+export type RoleKey = "admin" | "staff" | "responder" | "citizen" | "user";
+export async function countActiveAdmins() { const db = await getDb(); if (!db) return 0; const rows = await db.select({ count: sql<number>`count(*)` }).from(users).where(and(eq(users.role, "admin"), eq(users.accountStatus, "APPROVED"), or(isNull(users.demoExpiresAt), gt(users.demoExpiresAt, new Date())), isNull(users.demoRevokedAt))); return Number(rows[0]?.count ?? 0); }
+export async function createRoleChangeRequest(input: { requesterId: number; userId: number; fromRole: RoleKey; toRole: RoleKey; expiresAt: Date }) { const db = await getDb(); if (!db) throw new Error("Database unavailable"); const [created] = await db.insert(roleChangeRequests).values(input).$returningId(); return { ...input, id: created.id, status: "PENDING" as const, createdAt: new Date() }; }
+export async function getRoleChangeRequest(id: number) { const db = await getDb(); if (!db) return undefined; const rows = await db.select().from(roleChangeRequests).where(eq(roleChangeRequests.id, id)).limit(1); return rows[0]; }
+export async function listRoleChangeRequests() { const db = await getDb(); if (!db) return []; return db.select().from(roleChangeRequests).orderBy(desc(roleChangeRequests.createdAt)).limit(50); }
+export async function setRoleChangeRequestStatus(id: number, status: "APPROVED" | "REJECTED" | "EXPIRED", approverId?: number) { const db = await getDb(); if (!db) throw new Error("Database unavailable"); await db.update(roleChangeRequests).set({ status, approverId, decidedAt: new Date() }).where(eq(roleChangeRequests.id, id)); return { id, status }; }
 export async function listActivityLogs(entityType?: string) { const db = await getDb(); if (!db) return []; return db.select().from(activityLogs).where(entityType ? eq(activityLogs.entityType, entityType) : undefined).orderBy(desc(activityLogs.createdAt)).limit(100); }
 export async function listCenters() { const db = await getDb(); if (!db) return []; return db.select().from(evacuationCenters).orderBy(desc(evacuationCenters.updatedAt)); }
 export async function listCentersForUser(userId: number) { const db = await getDb(); if (!db) return []; return db.select({ center: evacuationCenters }).from(evacuationCenters).innerJoin(centerStaff, eq(centerStaff.centerId, evacuationCenters.id)).where(eq(centerStaff.userId, userId)).orderBy(desc(evacuationCenters.updatedAt)).then(rows => rows.map(row => row.center)); }

@@ -25,11 +25,13 @@ import {
   beginTwoFactorSetup,
   changeLocalPassword,
   confirmTwoFactorSetup,
+  countActiveAdmins,
   createAlert,
   createInvitation,
   createResponderAction,
   createResource,
   createRiskReport,
+  createRoleChangeRequest,
   disableTwoFactor,
   getOperationsSummary,
   getPublicSmsSettings,
@@ -37,6 +39,7 @@ import {
   getAlertById,
   getResourceById,
   getRiskReportById,
+  getRoleChangeRequest,
   getSettings,
   getTwoFactorStatus,
   getUserById,
@@ -59,6 +62,7 @@ import {
   listRiskReportsForUser,
   listResponders,
   listUsers,
+  listRoleChangeRequests,
   logActivity,
   provisionDemoAccount,
   provisionDemoAccounts,
@@ -70,6 +74,7 @@ import {
   removeResource,
   resetLocalPassword,
   revokeDemoAccount,
+  setRoleChangeRequestStatus,
   transactResource,
   transferEvacuee,
   updateResource,
@@ -854,24 +859,130 @@ export const appRouter = router({
     roleHistory: adminProcedure
       .input(z.object({ entityType: z.string().optional() }))
       .query(({ input }) => listActivityLogs(input.entityType)),
-    updateUserRole: adminProcedure
+    requestRoleChange: adminProcedure
       .input(
         z.object({
           userId: z.number().int().positive(),
           role: z.enum(["admin", "staff", "responder", "citizen", "user"]),
+          password: z.string().min(1).optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {
-        const result = await updateUserRole(input.userId, input.role);
+        enforceRateLimit(ctx.req, `role-change:${ctx.user.id}`, 10, 60 * 1000);
+        const target = await getUserById(input.userId);
+        if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "User not found." });
+        if (target.role === input.role)
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This user already has the selected role." });
+        if (ctx.user.id === input.userId)
+          throw new TRPCError({ code: "FORBIDDEN", message: "You cannot change your own role. Ask another administrator to do it." });
+        if (!input.password)
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Re-enter your password to authorize this role change." });
+        const verified = await verifyLocalCredentials(ctx.user.email ?? "", input.password);
+        if (!verified || verified.id !== ctx.user.id)
+          throw new TRPCError({ code: "FORBIDDEN", message: "That password does not match your account. No changes were made." });
+        const privileged = input.role === "admin" || target.role === "admin";
+        if (privileged) {
+          const adminCount = await countActiveAdmins();
+          if (target.role === "admin" && adminCount <= 1)
+            throw new TRPCError({ code: "FORBIDDEN", message: "You cannot demote the last active administrator." });
+          if (adminCount >= 2) {
+            const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+            const request = await createRoleChangeRequest({
+              requesterId: ctx.user.id,
+              userId: target.id,
+              fromRole: target.role,
+              toRole: input.role,
+              expiresAt,
+            });
+            await logActivity({
+              actorId: ctx.user.id,
+              action: "ROLE_CHANGE_REQUESTED",
+              entityType: "user",
+              entityId: target.id,
+              metadata: JSON.stringify({ role: input.role, requestId: request.id }),
+            });
+            return { outcome: "approval" as const, requestId: request.id, expiresAt, role: input.role };
+          }
+        }
+        await updateUserRole(target.id, input.role);
         await logActivity({
           actorId: ctx.user.id,
           action: "ROLE_CHANGED",
           entityType: "user",
-          entityId: input.userId,
-          metadata: JSON.stringify({ role: input.role }),
+          entityId: target.id,
+          metadata: JSON.stringify({ role: input.role, confirmedBy: "password" }),
         });
-        return result;
+        return { outcome: "applied" as const, userId: target.id, role: input.role };
       }),
+    approveRoleChange: adminProcedure
+      .input(z.object({ requestId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const request = await getRoleChangeRequest(input.requestId);
+        if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Role change request not found." });
+        if (request.status !== "PENDING")
+          throw new TRPCError({ code: "BAD_REQUEST", message: `This request was already ${request.status.toLowerCase()}.` });
+        if (request.requesterId === ctx.user.id)
+          throw new TRPCError({ code: "FORBIDDEN", message: "A different administrator must approve this request." });
+        if (request.expiresAt.getTime() <= Date.now()) {
+          await setRoleChangeRequestStatus(request.id, "EXPIRED");
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This request expired before it could be approved." });
+        }
+        const target = await getUserById(request.userId);
+        if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "The affected user no longer exists." });
+        if (target.role !== request.fromRole) {
+          await setRoleChangeRequestStatus(request.id, "REJECTED", ctx.user.id);
+          throw new TRPCError({ code: "CONFLICT", message: "This user's role changed since the request was made." });
+        }
+        if (request.fromRole === "admin" && (await countActiveAdmins()) <= 1)
+          throw new TRPCError({ code: "FORBIDDEN", message: "This change would demote the last active administrator." });
+        await updateUserRole(target.id, request.toRole);
+        await setRoleChangeRequestStatus(request.id, "APPROVED", ctx.user.id);
+        await logActivity({
+          actorId: ctx.user.id,
+          action: "ROLE_CHANGED",
+          entityType: "user",
+          entityId: target.id,
+          metadata: JSON.stringify({ role: request.toRole, requestId: request.id, requestedBy: request.requesterId }),
+        });
+        return { requestId: request.id, userId: target.id, role: request.toRole };
+      }),
+    rejectRoleChange: adminProcedure
+      .input(z.object({ requestId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const request = await getRoleChangeRequest(input.requestId);
+        if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Role change request not found." });
+        if (request.status !== "PENDING")
+          throw new TRPCError({ code: "BAD_REQUEST", message: `This request was already ${request.status.toLowerCase()}.` });
+        await setRoleChangeRequestStatus(request.id, "REJECTED", ctx.user.id);
+        await logActivity({
+          actorId: ctx.user.id,
+          action: "ROLE_CHANGE_REJECTED",
+          entityType: "user",
+          entityId: request.userId,
+          metadata: JSON.stringify({ requestId: request.id, role: request.toRole }),
+        });
+        return { requestId: request.id, status: "REJECTED" as const };
+      }),
+    roleChangeRequests: adminProcedure.query(async () => {
+      const requests = await listRoleChangeRequests();
+      const usersById = new Map((await listUsers()).map(user => [user.id, user]));
+      const now = Date.now();
+      return requests.map(request => {
+        const requester = usersById.get(request.requesterId);
+        const subject = usersById.get(request.userId);
+        return {
+          ...request,
+          status:
+            request.status === "PENDING" && request.expiresAt.getTime() <= now
+              ? ("EXPIRED" as const)
+              : request.status,
+          requesterName: requester?.name ?? `user #${request.requesterId}`,
+          requesterEmail: requester?.email ?? null,
+          userName: subject?.name ?? `user #${request.userId}`,
+          userEmail: subject?.email ?? null,
+        };
+      });
+    }),
     updateUserApproval: adminProcedure
       .input(z.object({ userId: z.number().int().positive(), accountStatus: z.enum(["APPROVED", "REJECTED"]) }))
       .mutation(async ({ ctx, input }) => {

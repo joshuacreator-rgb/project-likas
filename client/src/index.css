@@ -209,3 +209,19 @@ button { cursor:pointer; }
 .alert-table-cell strong { color: #173f3a; font-size: 11px; line-height: 1.4; }
 .alert-table-cell .alert-table-tag { margin-top: 2px; font-size: 8px; letter-spacing: .08em; text-transform: uppercase; font-weight: 700; color: #7d9691; }
 .alert-table-cell p { margin: 3px 0 0; color: #8d9d99; font-size: 10px; line-height: 1.4; max-width: 360px; }
+
+/* Role change approval flow. */
+.role-pending-chip { display: block; width: max-content; margin-top: 7px; }
+.role-request-panel { margin-top: 16px; padding: 18px; border: 1px solid #d9e7e3; border-radius: 14px; background: #f6faf8; }
+.role-request-head h3 { margin: 4px 0 14px; font-size: 16px; color: #173c38; }
+.role-request-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid #dce9e5; }
+.role-request-row:first-of-type { border-top: 0; }
+.role-request-copy { display: grid; gap: 3px; min-width: 0; }
+.role-request-copy strong { color: #173f3a; font-size: 12px; }
+.role-request-copy small { color: #617572; font-size: 10px; }
+.role-request-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+.role-request-actions button { min-height: 34px; padding: 0 11px; font-size: 10px; }
+.role-request-waiting { display: inline-flex; align-items: center; color: #7d9691; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
+.role-change-before-after { display: flex; align-items: center; gap: 10px; margin: 6px 0 4px; color: #617572; }
+.modal-copy { margin: 10px 0 0; color: #5d7772; line-height: 1.55; font-size: 12px; }
+@media (max-width: 560px) { .role-request-row { align-items: flex-start; flex-direction: column; }.role-request-actions { width: 100%; }.role-request-actions button { flex: 1; } }

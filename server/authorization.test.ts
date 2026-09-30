@@ -14,7 +14,7 @@ describe("role authorization", () => {
   it("rejects citizens from admin health", async () => {
     await expect(appRouter.createCaller(context("citizen")).admin.health()).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
-  it("rejects citizens from changing user roles", async () => {
-    await expect(appRouter.createCaller(context("citizen")).admin.updateUserRole({ userId: 1, role: "responder" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  it("rejects citizens from requesting role changes", async () => {
+    await expect(appRouter.createCaller(context("citizen")).admin.requestRoleChange({ userId: 1, role: "responder" })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });

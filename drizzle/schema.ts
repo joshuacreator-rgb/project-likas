@@ -21,6 +21,18 @@ export const weatherSnapshots = mysqlTable("weather_snapshots", { id: int("id").
 export const systemSettings = mysqlTable("system_settings", { id: int("id").autoincrement().primaryKey(), settingKey: varchar("settingKey", { length: 120 }).notNull().unique(), settingValue: text("settingValue"), updatedBy: int("updatedBy").references(() => users.id), updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull() });
 export const activityLogs = mysqlTable("activity_logs", { id: int("id").autoincrement().primaryKey(), actorId: int("actorId").references(() => users.id), action: varchar("action", { length: 120 }).notNull(), entityType: varchar("entityType", { length: 80 }).notNull(), entityId: int("entityId"), metadata: text("metadata"), createdAt: timestamp("createdAt").defaultNow().notNull() });
 export const reportExports = mysqlTable("report_exports", { id: int("id").autoincrement().primaryKey(), requestedBy: int("requestedBy").references(() => users.id), reportType: varchar("reportType", { length: 80 }).notNull(), fileKey: varchar("fileKey", { length: 500 }), fileUrl: varchar("fileUrl", { length: 1000 }), status: mysqlEnum("status", ["QUEUED", "READY", "FAILED"]).default("QUEUED").notNull(), createdAt: timestamp("createdAt").defaultNow().notNull() });
+export const roleChangeRequests = mysqlTable("role_change_requests", {
+  id: int("id").autoincrement().primaryKey(),
+  requesterId: int("requesterId").notNull().references(() => users.id),
+  approverId: int("approverId").references(() => users.id),
+  userId: int("userId").notNull().references(() => users.id),
+  fromRole: mysqlEnum("fromRole", ["user", "admin", "staff", "responder", "citizen"]).notNull(),
+  toRole: mysqlEnum("toRole", ["user", "admin", "staff", "responder", "citizen"]).notNull(),
+  status: mysqlEnum("status", ["PENDING", "APPROVED", "REJECTED", "EXPIRED"]).default("PENDING").notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  decidedAt: timestamp("decidedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
@@ -30,3 +42,4 @@ export type Resource = typeof resources.$inferSelect;
 export type RiskReport = typeof riskReports.$inferSelect;
 export type ReportExport = typeof reportExports.$inferSelect;
 export type Invitation = typeof invitations.$inferSelect;
+export type RoleChangeRequest = typeof roleChangeRequests.$inferSelect;

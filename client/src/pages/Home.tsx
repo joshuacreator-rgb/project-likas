@@ -1628,6 +1628,15 @@ function WorkspaceView({
     refetchOnWindowFocus: true,
     refetchOnMount: true,
   });
+  const { data: roleChangeRequests } = trpc.admin.roleChangeRequests.useQuery(
+    undefined,
+    {
+      enabled: active === "User & roles",
+      refetchInterval: active === "User & roles" ? 1000 : false,
+      refetchOnWindowFocus: true,
+      refetchOnMount: true,
+    }
+  );
   const {
     data: demoAccounts,
     isLoading: demoAccountsLoading,
@@ -1735,8 +1744,47 @@ function WorkspaceView({
       utils.admin.demoAccounts.invalidate();
     },
   });
-  const roleMutation = trpc.admin.updateUserRole.useMutation({
-    onSuccess: () => utils.admin.users.invalidate(),
+  const [roleCredential, setRoleCredential] = useState("");
+  const [roleFlowError, setRoleFlowError] = useState("");
+  const [rolePrompt, setRolePrompt] = useState<{
+    userId: number;
+    name: string;
+    email: string;
+    currentRole: string;
+    nextRole: string;
+  } | null>(null);
+  const requestRoleChangeMutation = trpc.admin.requestRoleChange.useMutation({
+    onSuccess: result => {
+      setRoleCredential("");
+      setRolePrompt(null);
+      setRoleFlowError("");
+      utils.admin.users.invalidate();
+      utils.admin.roleChangeRequests.invalidate();
+      if (result.outcome === "approval") {
+        toast("Role change request sent. Another administrator must approve it.");
+      } else {
+        toast(`Role updated to ${formatRoleLabel(result.role)}.`);
+      }
+    },
+    onError: error => setRoleFlowError(error.message),
+  });
+  const approveRoleChangeMutation = trpc.admin.approveRoleChange.useMutation({
+    onSuccess: () => {
+      setRoleFlowError("");
+      utils.admin.users.invalidate();
+      utils.admin.roleChangeRequests.invalidate();
+      toast("Request approved and role applied.");
+    },
+    onError: error => setRoleFlowError(error.message),
+  });
+  const rejectRoleChangeMutation = trpc.admin.rejectRoleChange.useMutation({
+    onSuccess: () => {
+      setRoleFlowError("");
+      utils.admin.users.invalidate();
+      utils.admin.roleChangeRequests.invalidate();
+      toast("Request declined.");
+    },
+    onError: error => setRoleFlowError(error.message),
   });
   const [approvalError, setApprovalError] = useState("");
   const approvalMutation = trpc.admin.updateUserApproval.useMutation({
@@ -2145,17 +2193,30 @@ function WorkspaceView({
                     <select
                       className="role-select"
                       value={managedUser.role}
-                      onChange={event =>
-                        roleMutation.mutate({
-                          userId: managedUser.id,
-                          role: event.target.value as
-                            | "admin"
-                            | "staff"
-                            | "responder"
-                            | "citizen"
-                            | "user",
-                        })
+                      disabled={managedUser.id === user?.id}
+                      title={
+                        managedUser.id === user?.id
+                          ? "Ask another administrator to change your own role"
+                          : undefined
                       }
+                      onChange={event => {
+                        const nextRole = event.target.value as
+                          | "admin"
+                          | "staff"
+                          | "responder"
+                          | "citizen"
+                          | "user";
+                        if (nextRole === managedUser.role) return;
+                        setRoleFlowError("");
+                        setRoleCredential("");
+                        setRolePrompt({
+                          userId: managedUser.id,
+                          name: managedUser.name || "This user",
+                          email: managedUser.email || "",
+                          currentRole: managedUser.role,
+                          nextRole,
+                        });
+                      }}
                     >
                       <option value="admin">Administrator</option>
                       <option value="staff">Evacuation Center Staff</option>
@@ -2165,6 +2226,15 @@ function WorkspaceView({
                       <option value="citizen">Citizen</option>
                       <option value="user">Citizen (legacy)</option>
                     </select>
+                    {roleChangeRequests?.some(
+                      request =>
+                        request.userId === managedUser.id &&
+                        request.status === "PENDING"
+                    ) && (
+                      <Badge variant="outline" className="role-pending-chip">
+                        Change pending approval
+                      </Badge>
+                    )}
                   </td>
                   <td className="workspace-approval-cell" data-label="Account status">
                     <div className="workspace-approval-controls">
@@ -2184,6 +2254,72 @@ function WorkspaceView({
               ))}
             </tbody>
           </table>
+          {roleChangeRequests?.some(request => request.status === "PENDING") && (
+            <div className="role-request-panel">
+              <div className="role-request-head">
+                <span className="eyebrow">ROLE APPROVAL QUEUE</span>
+                <h3>Awaiting administrator approval</h3>
+              </div>
+              {roleFlowError && (
+                <div className="login-error" role="alert">{roleFlowError}</div>
+              )}
+              {roleChangeRequests
+                .filter(request => request.status === "PENDING")
+                .map(request => (
+                  <div className="role-request-row" key={request.id}>
+                    <div className="role-request-copy">
+                      <strong>
+                        {request.userName} → {formatRoleLabel(request.toRole)}
+                      </strong>
+                      <small>
+                        Requested by{" "}
+                        {request.requesterId === user?.id
+                          ? "you"
+                          : request.requesterName}{" "}
+                        · expires {new Date(request.expiresAt).toLocaleString()}
+                      </small>
+                    </div>
+                    {request.requesterId === user?.id ? (
+                      <span className="role-request-waiting">
+                        Waiting for another administrator
+                      </span>
+                    ) : (
+                      <div className="role-request-actions">
+                        <Button
+                          size="sm"
+                          disabled={
+                            approveRoleChangeMutation.isPending ||
+                            rejectRoleChangeMutation.isPending
+                          }
+                          onClick={() =>
+                            approveRoleChangeMutation.mutate({
+                              requestId: request.id,
+                            })
+                          }
+                        >
+                          Approve
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={
+                            approveRoleChangeMutation.isPending ||
+                            rejectRoleChangeMutation.isPending
+                          }
+                          onClick={() =>
+                            rejectRoleChangeMutation.mutate({
+                              requestId: request.id,
+                            })
+                          }
+                        >
+                          Decline
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+            </div>
+          )}
         </div>
         {inviteOpen && (
           <div className="invite-panel">
@@ -2942,6 +3078,33 @@ function WorkspaceView({
             <label>Minimum stock<Input type="number" min="0" value={editResourceMinimum} onChange={event => setEditResourceMinimum(event.target.value)} required /></label>
             {(resourceError || updateResourceMutation.error) && <p className="login-error" role="alert">{resourceError || updateResourceMutation.error?.message}</p>}
             <div className="modal-actions"><Button type="button" variant="outline" onClick={() => setEditingResource(null)}>Cancel</Button><Button type="submit" disabled={updateResourceMutation.isPending}>Save stock</Button></div>
+          </form>
+        </div>
+      )}
+      {rolePrompt && (
+        <div className="modal-backdrop" onClick={() => setRolePrompt(null)}>
+          <form className="report-modal" onClick={event => event.stopPropagation()} onSubmit={event => {
+            event.preventDefault();
+            requestRoleChangeMutation.mutate({
+              userId: rolePrompt.userId,
+              role: rolePrompt.nextRole as "admin" | "staff" | "responder" | "citizen" | "user",
+              password: roleCredential,
+            });
+          }}>
+            <div className="modal-title"><div><span className="eyebrow">ROLE CHANGE PROTECTION</span><h2>Change {rolePrompt.name}'s role</h2></div><button type="button" onClick={() => setRolePrompt(null)}><X size={18} /></button></div>
+            <p className="modal-copy">
+              {rolePrompt.currentRole === "admin" || rolePrompt.nextRole === "admin"
+                ? "Promotions to or from Administrator go through the role approval flow. If another administrator exists, this change is sent for their approval and only takes effect once they approve it."
+                : "This role change is applied immediately, but you must confirm with your password first."}
+            </p>
+            <div className="role-change-before-after">
+              <Badge variant="outline">{formatRoleLabel(rolePrompt.currentRole)}</Badge>
+              <span aria-hidden="true">→</span>
+              <Badge>{formatRoleLabel(rolePrompt.nextRole)}</Badge>
+            </div>
+            <label>Confirm with your password<Input type="password" autoComplete="current-password" value={roleCredential} onChange={event => setRoleCredential(event.target.value)} placeholder="Your administrator password" required /></label>
+            {(roleFlowError || requestRoleChangeMutation.error) && <p className="login-error" role="alert">{roleFlowError || requestRoleChangeMutation.error?.message}</p>}
+            <div className="modal-actions"><Button type="button" variant="outline" onClick={() => setRolePrompt(null)}>Cancel</Button><Button type="submit" disabled={requestRoleChangeMutation.isPending || !roleCredential}>{requestRoleChangeMutation.isPending ? "Authorizing…" : "Authorize change"}</Button></div>
           </form>
         </div>
       )}
