@@ -99,7 +99,6 @@ export default function AccountRegister({
   );
   const completeApproval = trpc.localAuth.completeApproval.useMutation({
     onSuccess: () => {
-      sessionStorage.setItem("likas-login-complete", "true");
       window.location.href = "/citizen";
     },
     onError: error => {

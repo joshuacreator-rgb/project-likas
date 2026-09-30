@@ -489,19 +489,6 @@ export default function Home() {
       ).length,
     [liveReports]
   );
-  useEffect(() => {
-    const navigation = performance.getEntriesByType("navigation")[0] as
-      | PerformanceNavigationTiming
-      | undefined;
-    const wasAuthenticatedInApp =
-      sessionStorage.getItem("likas-login-complete") === "true";
-    if (wasAuthenticatedInApp) {
-      sessionStorage.removeItem("likas-login-complete");
-      return;
-    }
-    if (sessionStorage.getItem("likas-static-demo-role")) return;
-    if (navigation?.type === "reload") navigate("/login");
-  }, [navigate]);
   const displayCenters = useMemo(() => {
     const source = staticSession ? staticCenters : liveCenters;
     if (!source?.length) return staticSession ? centerData : [];

@@ -80,20 +80,14 @@ export function CitizenLogin() {
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [oauthError, setOauthError] = useState("");
 
-  const markAuthenticated = () => {
-    sessionStorage.setItem("likas-login-complete", "true");
-  };
-
   const login = trpc.localAuth.login.useMutation({
     onSuccess: () => {
-      markAuthenticated();
       navigate("/citizen");
     },
     onError: (error) => {
       if (!import.meta.env.DEV) return;
       const user = authenticateStaticAccount(email, password);
       if (!user || user.role !== "citizen") return;
-      markAuthenticated();
       navigate(getHomePath(user.role));
     },
   });
@@ -260,24 +254,18 @@ export function InternalLogin({
   const [twoFactorCode, setTwoFactorCode] = useState("");
   const [recoveryOpen, setRecoveryOpen] = useState(false);
 
-  const markAuthenticated = () => {
-    sessionStorage.setItem("likas-login-complete", "true");
-  };
-
   const login = trpc.localAuth.login.useMutation({
     onSuccess: (result) => {
       if (result.requiresTwoFactor) {
         setChallengeToken(result.challengeToken);
         return;
       }
-      markAuthenticated();
       navigate(getHomePath(role));
     },
   });
 
   const verifyTwoFactor = trpc.localAuth.verifyTwoFactor.useMutation({
     onSuccess: () => {
-      markAuthenticated();
       navigate(getHomePath(role));
     },
   });
