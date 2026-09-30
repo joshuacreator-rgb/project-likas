@@ -64,12 +64,22 @@ describe("auth security procedures", () => {
   });
   it("rejects privileged self-registration even when a role is supplied by the client", async () => {
     const caller = appRouter.createCaller(context());
-    await expect(caller.localAuth.register({ name: "Admin Attempt", email: "admin-attempt@gmail.com", password: "secure-password-123", role: "admin" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.localAuth.register({ firstName: "Admin", middleName: null, lastName: "Attempt", address: "123 Pateros St", age: 30, phone: "09171234567", email: "admin-attempt@gmail.com", password: "secure-password-123", role: "admin" })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("requires Gmail for citizen self-registration", async () => {
     const caller = appRouter.createCaller(context());
-    await expect(caller.localAuth.register({ name: "Non Gmail", email: "non-gmail@example.com", password: "secure-password-123" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(caller.localAuth.register({ firstName: "Non", middleName: null, lastName: "Gmail", address: "123 Pateros St", age: 30, phone: "09171234567", email: "non-gmail@example.com", password: "secure-password-123" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(mockedDb.registerLocalUser).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid mobile number or age during citizen registration", async () => {
+    const caller = appRouter.createCaller(context());
+    const base = { firstName: "Juan", middleName: null, lastName: "Dela Cruz", address: "123 Pateros St", age: 25, phone: "09171234567", email: "juan@gmail.com", password: "valid-password-123" };
+    await expect(caller.localAuth.register({ ...base, phone: "12345" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(caller.localAuth.register({ ...base, phone: "091712345" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(caller.localAuth.register({ ...base, age: 121 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(caller.localAuth.register({ ...base, age: -1 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(mockedDb.registerLocalUser).not.toHaveBeenCalled();
   });
 
@@ -79,8 +89,8 @@ describe("auth security procedures", () => {
     const response = { cookie: vi.fn(), clearCookie: vi.fn() };
     const caller = appRouter.createCaller({ user: null, req: { protocol: "https", headers: {} } as TrpcContext["req"], res: response as unknown as TrpcContext["res"] });
 
-    await expect(caller.localAuth.register({ name: created.name, email: created.email, password: "valid-password-123" })).resolves.toMatchObject({ approvalRequired: true, email: created.email, approvalToken: expect.any(String) });
-    expect(mockedDb.registerLocalUser).toHaveBeenCalledWith({ name: created.name, email: created.email, password: "valid-password-123", role: "citizen" });
+    await expect(caller.localAuth.register({ firstName: "New", middleName: null, lastName: "Citizen", address: "123 Pateros St", age: 25, phone: "09171234567", email: created.email, password: "valid-password-123" })).resolves.toMatchObject({ approvalRequired: true, email: created.email, approvalToken: expect.any(String) });
+    expect(mockedDb.registerLocalUser).toHaveBeenCalledWith({ firstName: "New", middleName: null, lastName: "Citizen", address: "123 Pateros St", age: 25, phone: "09171234567", name: "New Citizen", email: created.email, password: "valid-password-123", role: "citizen" });
     expect(mockedEmail.sendVerificationEmail).not.toHaveBeenCalled();
     expect(response.cookie).not.toHaveBeenCalled();
   });

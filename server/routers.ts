@@ -233,7 +233,14 @@ export const appRouter = router({
               message: "Use a Gmail address ending in @gmail.com.",
             }),
           password: z.string().min(10),
-          name: z.string().min(2).max(120),
+          firstName: z.string().trim().min(2).max(80),
+          lastName: z.string().trim().min(2).max(80),
+          middleName: z.string().trim().max(80).nullable().optional(),
+          address: z.string().trim().min(2).max(500),
+          age: z.number().int().min(0).max(120),
+          phone: z
+            .string()
+            .regex(/^09\d{9}$/, "Enter an 11-digit mobile number starting with 09."),
           role: z
             .enum(["admin", "staff", "responder", "citizen"])
             .default("citizen"),
@@ -247,7 +254,20 @@ export const appRouter = router({
             message:
               "Only Citizen accounts can self-register. Operational roles require an Administrator invitation or demo provisioning.",
           });
-        const user = await registerLocalUser(input);
+        const user = await registerLocalUser({
+          email: input.email,
+          password: input.password,
+          firstName: input.firstName,
+          middleName: input.middleName?.trim() || null,
+          lastName: input.lastName,
+          address: input.address,
+          age: input.age,
+          phone: input.phone,
+          name: [input.firstName, input.middleName?.trim(), input.lastName]
+            .filter(Boolean)
+            .join(" "),
+          role: input.role,
+        });
         const approvalToken = await new SignJWT({ type: "citizen-approval" })
           .setProtectedHeader({ alg: "HS256" })
           .setSubject(String(user.userId))

@@ -75,7 +75,12 @@ export default function AccountRegister({
   const [role, setRole] = useState<RegistrationRole>(
     () => initialRole ?? getRoleFromSearch(window.location.search)
   );
-  const [name, setName] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [middleName, setMiddleName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [address, setAddress] = useState("");
+  const [age, setAge] = useState("");
+  const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [approvalPending, setApprovalPending] = useState(false);
@@ -109,6 +114,8 @@ export default function AccountRegister({
   const isCitizenRegistration = role === "citizen";
   const hasEmail = email.trim().length > 0;
   const isGmailEmail = /^[^\s@]+@gmail\.com$/i.test(email.trim());
+  const hasPhone = phone.trim().length > 0;
+  const isPhoneValid = /^09\d{9}$/.test(phone.trim());
 
   useEffect(() => {
     if (approvalStatus.data?.accountStatus === "APPROVED" && !approvalAccepted && !completeApproval.isPending) {
@@ -140,7 +147,17 @@ export default function AccountRegister({
       );
       return;
     }
-    register.mutate({ name, email, password, role });
+    register.mutate({
+      firstName: firstName.trim(),
+      middleName: middleName.trim() || null,
+      lastName: lastName.trim(),
+      address: address.trim(),
+      age: Number(age),
+      phone: phone.trim(),
+      email,
+      password,
+      role,
+    });
   }
 
   function handleBack() {
@@ -255,19 +272,107 @@ export default function AccountRegister({
         aria-busy={register.isPending}
         onSubmit={handleSubmit}
       >
-        <label>
-          Your name
+        <div className="registration-name-group">
+          <label>
+            First name
+            <Input
+              value={firstName}
+              onChange={event => {
+                setFirstName(event.target.value);
+                register.reset();
+              }}
+              required
+              minLength={2}
+              maxLength={80}
+              autoComplete="given-name"
+            />
+          </label>
+          <label>
+            Middle name <span className="field-optional">(optional)</span>
+            <Input
+              value={middleName}
+              onChange={event => {
+                setMiddleName(event.target.value);
+                register.reset();
+              }}
+              maxLength={80}
+              autoComplete="additional-name"
+            />
+          </label>
+          <label>
+            Last name
+            <Input
+              value={lastName}
+              onChange={event => {
+                setLastName(event.target.value);
+                register.reset();
+              }}
+              required
+              minLength={2}
+              maxLength={80}
+              autoComplete="family-name"
+            />
+          </label>
+        </div>
+        <label className="registration-address-field">
+          Complete address
           <Input
-            value={name}
+            value={address}
             onChange={event => {
-              setName(event.target.value);
+              setAddress(event.target.value);
               register.reset();
             }}
             required
             minLength={2}
-            autoComplete="name"
+            maxLength={500}
+            autoComplete="street-address"
           />
         </label>
+        <div className="registration-age-phone-row">
+          <label>
+            Age
+            <Input
+              type="number"
+              value={age}
+              onChange={event => {
+                setAge(event.target.value);
+                register.reset();
+              }}
+              required
+              min={0}
+              max={120}
+              inputMode="numeric"
+              autoComplete="off"
+            />
+          </label>
+          <label>
+            Mobile / CP number
+            <div className="email-input-wrap">
+              <Input
+                type="tel"
+                value={phone}
+                pattern="09[0-9]{9}"
+                title="Enter an 11-digit mobile number starting with 09."
+                onChange={event => {
+                  setPhone(event.target.value);
+                  register.reset();
+                }}
+                required
+                autoComplete="tel-national"
+                aria-invalid={hasPhone && !isPhoneValid}
+                aria-describedby={hasPhone && !isPhoneValid ? "registration-phone-alert" : undefined}
+              />
+              {isPhoneValid && (
+                <CheckCircle2 className="email-valid-icon" size={19} aria-label="Valid mobile number" />
+              )}
+            </div>
+            {hasPhone && !isPhoneValid && (
+              <span id="registration-phone-alert" className="email-validation-alert" role="alert">
+                Enter an 11-digit mobile number starting with 09.
+              </span>
+            )}
+          </label>
+        </div>
         <label>
           Email address
           <div className="email-input-wrap">
