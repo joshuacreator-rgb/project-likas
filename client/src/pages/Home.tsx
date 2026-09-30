@@ -1357,6 +1357,7 @@ function WorkspaceView({
   const [inviteRole, setInviteRole] = useState<"staff" | "responder">(
     "responder"
   );
+  const [inviteCopied, setInviteCopied] = useState(false);
   const [demoOpen, setDemoOpen] = useState(false);
   const [demoName, setDemoName] = useState("Training account");
   const [demoRole, setDemoRole] = useState<
@@ -1381,7 +1382,7 @@ function WorkspaceView({
     onSuccess: () => {
       setInviteName("");
       setInviteEmail("");
-      setInviteOpen(false);
+      setInviteCopied(false);
       utils.admin.invitations.invalidate();
     },
   });
@@ -1869,11 +1870,51 @@ function WorkspaceView({
                 {inviteMutation.isPending ? "Creating…" : "Create invitation"}
               </Button>
             </div>
-            {inviteMutation.data?.inviteToken && (
-              <p className="invite-token" role="status">
-                Invite created. Share this one-time link:{" "}
-                <code>{`${window.location.origin}/accept-invitation?token=${inviteMutation.data.inviteToken}`}</code>
-              </p>
+            {inviteMutation.data && (
+              <div className="invite-result">
+                {inviteMutation.data.emailSent ? (
+                  <p
+                    className="invite-sent"
+                    role="status"
+                    style={{ color: "#168a70", marginBottom: 8 }}
+                  >
+                    ☑ Invitation sent to {inviteMutation.data.email} — they set
+                    their password using the emailed link.
+                  </p>
+                ) : (
+                  <p className="login-error" role="alert">
+                    Invitation created, but the email could not be sent:{" "}
+                    {inviteMutation.data.emailError ?? "unknown error"}
+                  </p>
+                )}
+                <p className="invite-token">
+                  One-time link (expires in 7 days):{" "}
+                  <code style={{ wordBreak: "break-all" }}>
+                    {inviteMutation.data.inviteUrl}
+                  </code>
+                </p>
+                <div className="invite-actions" style={{ marginTop: 8 }}>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      const link = inviteMutation.data!.inviteUrl;
+                      if (navigator.clipboard) {
+                        void navigator.clipboard.writeText(link);
+                      }
+                      setInviteCopied(true);
+                    }}
+                  >
+                    {inviteCopied ? "Copied!" : "Copy invite link"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setInviteOpen(false)}
+                  >
+                    Done
+                  </Button>
+                </div>
+              </div>
             )}
             {inviteMutation.error && (
               <p className="login-error" role="alert">

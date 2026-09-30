@@ -11,6 +11,13 @@
 
 Local email/password registration and sign-in use the database and require `DATABASE_URL` and `JWT_SECRET`.
 
+## Emails (invitations & password recovery)
+
+- Set `RESEND_API_KEY` and `EMAIL_FROM`, otherwise invitation and password-recovery emails are skipped.
+- `EMAIL_FROM` must use a domain verified in Resend (add the domain, paste the SPF/DKIM DNS records, verify). The sandbox sender `onboarding@resend.dev` only delivers to your own Resend account email.
+- Set `PUBLIC_URL` with the `https://` scheme so emailed links reach the deployed app.
+- If an invitation email fails, the admin UI shows the reason plus a copy-link fallback, and the invitation stays active. Check the server log for `[Invite]` / `[Email]` entries.
+
 ## Platform sign-in
 
 Platform OAuth is optional. Set `VITE_OAUTH_PORTAL_URL`, `VITE_APP_ID`, and `OAUTH_SERVER_URL` only when an OAuth application has been provisioned. Register this callback with the provider:

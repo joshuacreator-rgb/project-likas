@@ -764,25 +764,21 @@ export const appRouter = router({
         const baseUrl = process.env.PUBLIC_URL ?? "http://localhost:5173";
         const inviteUrl = `${baseUrl}/accept-invitation?token=${result.inviteToken}`;
 
-        try {
-          await sendInvitationEmail({
-            email: result.email,
-            name: input.name,
-            role: input.role,
-            inviteUrl,
-          });
-        } catch (err) {
-          console.warn("[Invite] Email failed, invitation still active:", err);
-        }
+        const emailResult = await sendInvitationEmail({
+          email: result.email,
+          name: input.name,
+          role: input.role,
+          inviteUrl,
+        });
 
         await logActivity({
           actorId: ctx.user.id,
           action: "INVITE",
           entityType: "user",
           entityId: result.id,
-          metadata: JSON.stringify({ email: result.email, role: result.role }),
+          metadata: JSON.stringify({ email: result.email, role: result.role, emailSent: emailResult.sent }),
         });
-        return result;
+        return { ...result, emailSent: emailResult.sent, emailError: emailResult.error, inviteUrl };
       }),
     roleHistory: adminProcedure
       .input(z.object({ entityType: z.string().optional() }))
