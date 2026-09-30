@@ -174,3 +174,10 @@ button { cursor:pointer; }
 .citizen-map { width: 100%; height: 400px; }
 .citizen-map-popup-address { display: block; margin: 4px 0 8px; color: #5b706d; }
 .citizen-map a { color: #147d70; font-weight: 700; }
+.incident-timeline-notice { background: #fdf3ec; border: 1px solid #f2d9c3; color: #7c4a1d; border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.5; margin-bottom: 10px; }
+.incident-assignment { margin: 16px 0 4px; padding-top: 14px; border-top: 1px dashed #d5e3df; display: grid; gap: 10px; }
+.incident-assignment-head { display: flex; justify-content: space-between; align-items: center; }
+.assignment-select-label { display: grid; gap: 6px; font-size: 13px; font-weight: 700; color: #31584f; }
+.assignment-select-label select { width: 100%; min-height: 40px; border: 1px solid #bfd6d0; border-radius: 10px; background: #fff; padding: 0 10px; color: #173f3a; font: inherit; }
+.assignment-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.assignment-other { display: flex; align-items: center; gap: 8px; color: #6f8580; font-size: 14px; }

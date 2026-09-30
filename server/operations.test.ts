@@ -33,6 +33,30 @@ describe("Project Likas operational rules", () => {
     expect(canTransitionReport("RESOLVED", "PENDING")).toBe(false);
   });
 
+  it("allows only the full valid transition map for incident statuses", () => {
+    const statuses = ["PENDING", "VERIFIED", "IN_PROGRESS", "RESOLVED", "REJECTED"] as const;
+    const expected: Record<(typeof statuses)[number], (typeof statuses)[number][]> = {
+      PENDING: ["PENDING", "VERIFIED", "REJECTED"],
+      VERIFIED: ["VERIFIED", "IN_PROGRESS", "REJECTED"],
+      IN_PROGRESS: ["IN_PROGRESS", "RESOLVED"],
+      RESOLVED: ["RESOLVED"],
+      REJECTED: ["REJECTED"],
+    };
+    for (const current of statuses) {
+      for (const next of statuses) {
+        expect(canTransitionReport(current, next)).toBe(expected[current].includes(next));
+      }
+    }
+  });
+
+  it("never lets a skipped or backwards status change through", () => {
+    expect(canTransitionReport("PENDING", "IN_PROGRESS")).toBe(false);
+    expect(canTransitionReport("VERIFIED", "RESOLVED")).toBe(false);
+    expect(canTransitionReport("IN_PROGRESS", "VERIFIED")).toBe(false);
+    expect(canTransitionReport("IN_PROGRESS", "REJECTED")).toBe(false);
+    expect(canTransitionReport("RESOLVED", "REJECTED")).toBe(false);
+  });
+
   it("falls back to in-app delivery when providers are not configured", () => {
     expect(resolveNotificationDelivery({})).toEqual({ channels: ["IN_APP"], fallback: true });
     expect(resolveNotificationDelivery({ emailConfigured: true, smsConfigured: true })).toEqual({ channels: ["EMAIL", "SMS"], fallback: false });

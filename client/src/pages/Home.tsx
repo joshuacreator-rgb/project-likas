@@ -60,6 +60,7 @@ import {
   getLoginPath,
   getRegisterPath,
 } from "../../../shared/roles";
+import { canTransitionReport, type ReportStatus } from "../../../shared/operations";
 import CitizenHome from "./CitizenHome";
 import RoleOnboarding from "@/components/RoleOnboarding";
 import {
@@ -186,6 +187,7 @@ type IncidentSummary = {
   status?: string;
   createdAt?: string | Date;
   resolution?: string | null;
+  assignedResponderId?: number | null;
 };
 const staticCentersStorageKey = "likas-static-centers";
 const staticResourcesStorageKey = "likas-static-resources";
@@ -301,10 +303,32 @@ export default function Home() {
   const [selectedIncident, setSelectedIncident] = useState<IncidentSummary | null>(null);
   const [selectedIncidentReportId, setSelectedIncidentReportId] = useState<number | null>(null);
   const [responderNotified, setResponderNotified] = useState(false);
+  const [assignTarget, setAssignTarget] = useState(0);
+  const isAdmin = user?.role === "admin";
+  const isStaff = user?.role === "staff";
   const notifyResponders = trpc.operations.notifyResponders.useMutation({
     onSuccess: () => setResponderNotified(true),
   });
-  const { data: incidentTimeline, isLoading: incidentTimelineLoading } = trpc.operations.incidentTimeline.useQuery(
+  const { data: responders } = trpc.operations.listResponders.useQuery(undefined, {
+    enabled: (isAdmin || isStaff) && Boolean(selectedIncident) && !isStaticSession(),
+  });
+  const assignResponderMutation = trpc.operations.assignResponder.useMutation({
+    onSuccess: result => {
+      setSelectedIncident(previous =>
+        previous ? { ...previous, assignedResponderId: result.assignedResponderId } : previous
+      );
+      setAssignTarget(result.assignedResponderId ?? 0);
+      utils.operations.reports.invalidate();
+      utils.operations.incidentTimeline.invalidate();
+    },
+  });
+  const claimIncidentMutation = trpc.operations.claimIncident.useMutation({
+    onSuccess: () => {
+      utils.operations.reports.invalidate();
+      utils.operations.incidentTimeline.invalidate();
+    },
+  });
+  const { data: incidentTimeline, isLoading: incidentTimelineLoading, error: incidentTimelineError } = trpc.operations.incidentTimeline.useQuery(
     { reportId: selectedIncidentReportId ?? 0 },
     { enabled: selectedIncidentReportId !== null && !isStaticSession() }
   );
@@ -437,6 +461,7 @@ export default function Home() {
   function openIncident(incident: IncidentSummary, reportId?: number) {
     setSelectedIncident(incident);
     setSelectedIncidentReportId(reportId ?? null);
+    setAssignTarget(incident.assignedResponderId ?? 0);
     setResponderNotified(false);
     notifyResponders.reset();
   }
@@ -1152,6 +1177,13 @@ export default function Home() {
                 {incidentTimelineLoading && <LoaderCircle className="login-spinner" size={17} aria-label="Loading timeline" />}
               </div>
               <div className="incident-timeline-list">
+                {incidentTimelineError && (
+                  <div className="incident-timeline-notice" role="alert">
+                    {incidentTimelineError.message.includes("assigned")
+                      ? "This incident isn't assigned to you. Ask an administrator to assign it, or claim it below."
+                      : incidentTimelineError.message}
+                  </div>
+                )}
                 <div className="incident-timeline-event">
                   <span className="incident-timeline-dot" />
                   <div><strong>Report received</strong><small>{selectedIncident.createdAt ? new Date(selectedIncident.createdAt).toLocaleString() : selectedIncident.time}</small><p>Incident was logged at {selectedIncident.location}.</p></div>
@@ -1160,6 +1192,96 @@ export default function Home() {
                 {incidentTimeline?.actions.map(action => <div className="incident-timeline-event" key={action.id}><span className="incident-timeline-dot" /><div><strong>{action.action}</strong><small>{new Date(action.createdAt).toLocaleString()}</small>{action.resourcesUsed && <p>Resources used: {action.resourcesUsed}</p>}{action.arrivalAt && <p>Arrived: {new Date(action.arrivalAt).toLocaleString()}</p>}{action.completedAt && <p>Completed: {new Date(action.completedAt).toLocaleString()}</p>}</div></div>)}
                 {selectedIncident.status === "RESOLVED" && <div className="incident-timeline-event"><span className="incident-timeline-dot complete" /><div><strong>Incident resolved</strong><small>Resolution recorded</small>{selectedIncident.resolution && <p>{selectedIncident.resolution}</p>}</div></div>}
               </div>
+            </div>
+            <div className="incident-assignment">
+              <div className="incident-assignment-head">
+                <span className="eyebrow">RESPONDER ASSIGNMENT</span>
+              </div>
+              {!isStaticSession() && (isAdmin || isStaff) && (
+                <>
+                  <label className="assignment-select-label">
+                    Assigned responder
+                    <select
+                      className="role-select"
+                      aria-label="Assign responder"
+                      value={assignTarget}
+                      onChange={e => setAssignTarget(Number(e.target.value))}
+                    >
+                      <option value={0}>Unassigned</option>
+                      {(responders ?? []).map(responder => (
+                        <option key={responder.id} value={responder.id}>
+                          {responder.name} · {responder.email}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="assignment-actions">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        selectedIncidentReportId !== null &&
+                        assignResponderMutation.mutate({
+                          reportId: selectedIncidentReportId,
+                          responderId: assignTarget || null,
+                        })
+                      }
+                      disabled={assignResponderMutation.isPending}
+                    >
+                      {assignResponderMutation.isPending
+                        ? "Saving…"
+                        : assignTarget === 0
+                          ? "Remove assignment"
+                          : "Assign responder"}
+                    </Button>
+                    {assignResponderMutation.isSuccess && (
+                      <p className="incident-notified" role="status">
+                        <CheckCircle2 size={16} /> Assignment saved.
+                      </p>
+                    )}
+                    {assignResponderMutation.error && (
+                      <p className="login-error" role="alert">
+                        {assignResponderMutation.error.message}
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
+              {!isStaticSession() && isResponder && (
+                selectedIncident.assignedResponderId === user?.id ? (
+                  <p className="incident-notified" role="status">
+                    <ShieldCheck size={16} /> You are the assigned responder for this incident.
+                  </p>
+                ) : selectedIncident.assignedResponderId ? (
+                  <p className="assignment-other">
+                    <UserCog size={15} /> This incident is assigned to another responder.
+                  </p>
+                ) : (
+                  <div className="assignment-actions">
+                    <Button
+                      type="button"
+                      onClick={() =>
+                        selectedIncidentReportId !== null &&
+                        claimIncidentMutation.mutate({ reportId: selectedIncidentReportId })
+                      }
+                      disabled={claimIncidentMutation.isPending}
+                    >
+                      {claimIncidentMutation.isPending ? "Claiming…" : "Claim this incident"}
+                    </Button>
+                    {claimIncidentMutation.isSuccess && (
+                      <p className="incident-notified" role="status">
+                        <CheckCircle2 size={16} /> Incident claimed — it is now assigned to you.
+                      </p>
+                    )}
+                    {claimIncidentMutation.error && (
+                      <p className="login-error" role="alert">
+                        {claimIncidentMutation.error.message}
+                      </p>
+                    )}
+                  </div>
+                )
+              )}
             </div>
             {responderNotified ? <div className="incident-notified" role="status"><CheckCircle2 size={18} /> Responder / Disaster Team has been notified.</div> : <Button onClick={handleNotifyResponders} disabled={notifyResponders.isPending}>{notifyResponders.isPending ? "Notifying responders…" : "Notify responder / disaster team"}<Bell size={17} /></Button>}
             {notifyResponders.error && <p className="login-error" role="alert">{notifyResponders.error.message}</p>}
@@ -2126,10 +2248,10 @@ function WorkspaceView({
                   <article className="responder-incident-item" key={report.id}>
                 <div><strong>{report.reportCode}</strong><span>{report.reportType}</span></div>
                 <p>{report.location}</p>
-                <button type="button" className="incident-timeline-button" onClick={() => onOpenIncident?.({ id: report.reportCode, type: report.reportType, location: report.location, priority: report.priority, time: "Live report", color: report.priority === "CRITICAL" ? "rose" : report.priority === "HIGH" ? "amber" : "blue", reportId: report.id, status: report.status, createdAt: report.createdAt, resolution: report.resolution }, report.id)}>View incident timeline <ChevronRight size={14} /></button>
+                <button type="button" className="incident-timeline-button" onClick={() => onOpenIncident?.({ id: report.reportCode, type: report.reportType, location: report.location, priority: report.priority, time: "Live report", color: report.priority === "CRITICAL" ? "rose" : report.priority === "HIGH" ? "amber" : "blue", reportId: report.id, status: report.status, createdAt: report.createdAt, resolution: report.resolution, assignedResponderId: report.assignedResponderId ?? null }, report.id)}>View incident timeline <ChevronRight size={14} /></button>
                 <div className="responder-incident-actions">
                   {report.latitude != null && report.longitude != null ? <a href={`https://www.google.com/maps/dir/?api=1&destination=${report.latitude},${report.longitude}`} target="_blank" rel="noreferrer"><MapPin size={14} /> Go there</a> : <small>Exact coordinates are not available for this report.</small>}
-                  {report.status === "RESOLVED" ? <small><CheckCircle2 size={14} /> Done</small> : (user?.role === "responder" || user?.role === "admin") && <Button type="button" variant="outline" onClick={() => markIncidentDone(report.id)} disabled={updateRiskReportMutation.isPending}><CheckCircle2 size={14} /> Mark done</Button>}
+                  {report.status === "RESOLVED" ? <small><CheckCircle2 size={14} /> Done</small> : (user?.role === "responder" || user?.role === "admin") && canTransitionReport(report.status as ReportStatus, "RESOLVED") && <Button type="button" variant="outline" onClick={() => markIncidentDone(report.id)} disabled={updateRiskReportMutation.isPending}><CheckCircle2 size={14} /> Mark done</Button>}
                 </div>
               </article>
             ))}
@@ -2179,6 +2301,7 @@ function WorkspaceView({
                   status: report.status,
                   createdAt: report.createdAt,
                   resolution: report.resolution,
+                  assignedResponderId: report.assignedResponderId ?? null,
                 }, report.id)}
               >View incident timeline <ChevronRight size={14} /></button>
               <div className="responder-incident-actions">
@@ -2188,27 +2311,27 @@ function WorkspaceView({
                 {report.status === "RESOLVED"
                   ? <small><CheckCircle2 size={14} /> Resolved</small>
                   : (user?.role === "responder" || user?.role === "admin") && <>
-                    {user?.role === "admin" && (
-                      <select
-                        aria-label="Update report status"
-                        className="role-select"
-                        value={report.status}
-                        onChange={e => {
-                          if (!isStaticSession()) {
-                            updateRiskReportMutation.mutate({ reportId: report.id, status: e.target.value as "PENDING" | "VERIFIED" | "IN_PROGRESS" | "RESOLVED" | "REJECTED" });
-                          }
-                        }}
-                      >
-                        <option value="PENDING">PENDING</option>
-                        <option value="VERIFIED">VERIFIED</option>
-                        <option value="IN_PROGRESS">IN PROGRESS</option>
-                        <option value="RESOLVED">RESOLVED</option>
-                        <option value="REJECTED">REJECTED</option>
-                      </select>
+                    <select
+                      aria-label="Update report status"
+                      className="role-select"
+                      value={report.status}
+                      onChange={e => {
+                        if (!isStaticSession()) {
+                          updateRiskReportMutation.mutate({ reportId: report.id, status: e.target.value as ReportStatus });
+                        }
+                      }}
+                    >
+                      {(["PENDING", "VERIFIED", "IN_PROGRESS", "RESOLVED", "REJECTED"] as ReportStatus[]).map(option => (
+                        <option key={option} value={option} disabled={option !== report.status && !canTransitionReport(report.status as ReportStatus, option)}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                    {canTransitionReport(report.status as ReportStatus, "RESOLVED") && (
+                      <Button type="button" variant="outline" onClick={() => markIncidentDone(report.id)} disabled={updateRiskReportMutation.isPending}>
+                        <CheckCircle2 size={14} /> Mark done
+                      </Button>
                     )}
-                    <Button type="button" variant="outline" onClick={() => markIncidentDone(report.id)} disabled={updateRiskReportMutation.isPending}>
-                      <CheckCircle2 size={14} /> Mark done
-                    </Button>
                   </>}
               </div>
             </article>

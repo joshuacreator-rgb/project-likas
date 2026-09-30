@@ -11,7 +11,7 @@ import {
 } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { clearRateLimit, enforceRateLimit } from "./_core/rateLimit";
-import { getResourceStatus } from "../shared/operations";
+import { getResourceStatus, canTransitionReport, type ReportStatus } from "../shared/operations";
 import { sendInvitationEmail, sendPasswordResetEmail } from "./_core/email";
 import {
   isRoleSelectionAllowed,
@@ -56,6 +56,7 @@ import {
   listResponderActions,
   listRiskReports,
   listRiskReportsForUser,
+  listResponders,
   listUsers,
   logActivity,
   provisionDemoAccount,
@@ -617,8 +618,19 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const { reportId, ...changes } = input;
-        if (ctx.user.role === "responder" && (await getRiskReportById(reportId))?.assignedResponderId !== ctx.user.id)
+        const report = await getRiskReportById(reportId);
+        if (!report)
+          throw new TRPCError({ code: "NOT_FOUND", message: "Incident not found." });
+        if (ctx.user.role === "responder" && report.assignedResponderId !== ctx.user.id)
           throw new TRPCError({ code: "FORBIDDEN", message: "You can only update incidents assigned to you." });
+        if (
+          changes.status &&
+          !canTransitionReport(report.status as ReportStatus, changes.status as ReportStatus)
+        )
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `An incident cannot move from ${report.status} to ${changes.status}.`,
+          });
         const result = await updateRiskReport(reportId, changes);
         await logActivity({
           actorId: ctx.user.id,
@@ -664,6 +676,53 @@ export const appRouter = router({
           entityId: input.reportId,
         });
         return result;
+      }),
+    listResponders: roleProcedure(["admin", "staff"]).query(() => listResponders()),
+    assignResponder: roleProcedure(["admin", "staff"])
+      .input(
+        z.object({
+          reportId: z.number().int().positive(),
+          responderId: z.number().int().positive().nullable(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const report = await getRiskReportById(input.reportId);
+        if (!report)
+          throw new TRPCError({ code: "NOT_FOUND", message: "Incident not found." });
+        if (report.status === "RESOLVED" || report.status === "REJECTED")
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Closed incidents cannot be reassigned." });
+        if (input.responderId !== null) {
+          const responder = await getUserById(input.responderId);
+          if (!responder || responder.role !== "responder")
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Choose a responder account." });
+        }
+        await updateRiskReport(input.reportId, { assignedResponderId: input.responderId });
+        await logActivity({
+          actorId: ctx.user.id,
+          action: input.responderId === null ? "RESPONDER_UNASSIGNED" : "RESPONDER_ASSIGNED",
+          entityType: "risk_report",
+          entityId: input.reportId,
+        });
+        return { reportId: input.reportId, assignedResponderId: input.responderId };
+      }),
+    claimIncident: roleProcedure(["responder"])
+      .input(z.object({ reportId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const report = await getRiskReportById(input.reportId);
+        if (!report)
+          throw new TRPCError({ code: "NOT_FOUND", message: "Incident not found." });
+        if (report.status === "RESOLVED" || report.status === "REJECTED")
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Closed incidents cannot be claimed." });
+        if (report.assignedResponderId && report.assignedResponderId !== ctx.user.id)
+          throw new TRPCError({ code: "FORBIDDEN", message: "This incident is already assigned to another responder." });
+        await updateRiskReport(input.reportId, { assignedResponderId: ctx.user.id });
+        await logActivity({
+          actorId: ctx.user.id,
+          action: "RESPONDER_ASSIGNED",
+          entityType: "risk_report",
+          entityId: input.reportId,
+        });
+        return { reportId: input.reportId, assignedResponderId: ctx.user.id };
       }),
     alerts: roleProcedure(allowedRoles).query(() => listAlerts()),
     notifyResponders: roleProcedure(["admin", "staff", "responder"]).input(z.object({ incidentId: z.string().min(1), incidentType: z.string().min(2), location: z.string().min(2), priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]) })).mutation(async ({ ctx, input }) => {
