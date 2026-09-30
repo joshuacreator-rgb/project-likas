@@ -1964,6 +1964,16 @@ function WorkspaceView({
   const visibleCenterRows = (user?.role === "staff" ? centers?.filter(center => center.status !== "CLOSED") : centers)?.filter(center => !normalizedSearch || `${center.name} ${center.address} ${center.barangay} ${center.status}`.toLowerCase().includes(normalizedSearch));
   const visibleResourceRows = (resources ?? liveResources ?? []).filter(resource => !normalizedSearch || `${resource.name} ${resource.category} ${resource.status} ${resource.unit}`.toLowerCase().includes(normalizedSearch));
   const filteredLiveReports = liveReports?.filter(report => !normalizedSearch || `${report.reportCode} ${report.reportType} ${report.location} ${report.status} ${report.priority}`.toLowerCase().includes(normalizedSearch));
+  const alertAudienceLabels: Record<string, string> = {
+    ALL_USERS: "All users",
+    CITIZENS: "Citizens",
+    STAFF: "Staff",
+    RESPONDERS: "Responders",
+    ADMIN: "Admins only",
+  };
+  const alertMessages = active === "Alerts" && workspaceAlerts !== undefined
+    ? workspaceAlertsForRole.map(alert => ({ alertType: alert.alertType, message: alert.message }))
+    : [];
   const workspaceRows = active === "Evacuation centers" && centers !== undefined
     ? visibleCenterRows!.map(center => [
         center.name,
@@ -1976,7 +1986,7 @@ function WorkspaceView({
     : active === "Risk reports" && liveReports !== undefined
       ? (filteredLiveReports ?? []).map(report => [report.reportCode, report.reportType, report.location, report.status])
       : active === "Alerts" && workspaceAlerts !== undefined
-        ? workspaceAlertsForRole.map(alert => [alert.title, alert.targetAudience, alert.priority, alert.isActive ? "ACTIVE" : "ENDED"])
+        ? workspaceAlertsForRole.map(alert => [alert.title, alertAudienceLabels[alert.targetAudience] ?? alert.targetAudience, alert.priority, alert.isActive ? "ACTIVE" : "ENDED"])
       : view.rows.filter(row => !normalizedSearch || row.some(cell => cell.toLowerCase().includes(normalizedSearch)));
   const tableColumns = active === "Evacuation centers" || active === "Resources" ? [...view.columns, "Actions"] : view.columns;
   const reportDestinations = active === "Risk reports" && liveReports !== undefined
@@ -2771,15 +2781,25 @@ function WorkspaceView({
               <tr key={`${active}-${index}`}>
                 {row.map((cell, cellIndex) => (
                   <td key={cell}>
-                    {active === "Risk reports" && cellIndex === 2 && reportDestinations[index] ? <a href={reportDestinations[index]} target="_blank" rel="noreferrer" className="table-location-link">{cell} <MapIcon size={13} /></a> : <span
-                      className={
-                        cellIndex === row.length - 1
-                          ? `table-status ${cell.includes("CRITICAL") || cell.includes("OUT") ? "rose" : cell.includes("LOW") || cell.includes("HIGH") || cell.includes("FULL") ? "amber" : "teal"}`
-                          : ""
-                      }
-                    >
-                      {cell}
-                    </span>}
+                    {active === "Alerts" && cellIndex === 0 && alertMessages[index] ? (
+                      <div className="alert-table-cell">
+                        <strong>{cell}</strong>
+                        <span className="alert-table-tag">{alertMessages[index].alertType}</span>
+                        <p>{alertMessages[index].message}</p>
+                      </div>
+                    ) : active === "Risk reports" && cellIndex === 2 && reportDestinations[index] ? (
+                      <a href={reportDestinations[index]} target="_blank" rel="noreferrer" className="table-location-link">{cell} <MapIcon size={13} /></a>
+                    ) : (
+                      <span
+                        className={
+                          cellIndex === row.length - 1
+                            ? `table-status ${cell.includes("CRITICAL") || cell.includes("OUT") ? "rose" : cell.includes("LOW") || cell.includes("HIGH") || cell.includes("FULL") ? "amber" : "teal"}`
+                            : ""
+                        }
+                      >
+                        {cell}
+                      </span>
+                    )}
                   </td>
                 ))}
                 {active === "Evacuation centers" && visibleCenterRows?.[index] ? (
