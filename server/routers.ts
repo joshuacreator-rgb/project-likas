@@ -210,8 +210,8 @@ export const appRouter = router({
     }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      ctx.res.clearCookie("likas_session", { ...cookieOptions, maxAge: -1 });
+      ctx.res.clearCookie(COOKIE_NAME, cookieOptions);
+      ctx.res.clearCookie("likas_session", cookieOptions);
       return { success: true } as const;
     }),
   }),
@@ -770,6 +770,12 @@ export const appRouter = router({
           role: input.role,
           inviteUrl,
         });
+
+        if (!emailResult.sent) {
+          console.warn(
+            `[Invite] Email failed for ${result.email}: ${emailResult.error ?? "unknown error"}`
+          );
+        }
 
         await logActivity({
           actorId: ctx.user.id,

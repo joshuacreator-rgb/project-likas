@@ -93,6 +93,7 @@ describe("createInvitation email reporting", () => {
       sent: false,
       error: "Resend rejected the email (status 422): blocked sender",
     });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const caller = appRouter.createCaller(context());
     const result = await caller.admin.createInvitation({
       email: "staff@example.com",
@@ -103,10 +104,15 @@ describe("createInvitation email reporting", () => {
     expect(result.emailSent).toBe(false);
     expect(result.emailError).toContain("Resend rejected the email");
     expect(result.inviteUrl).toContain("token=invite-token-123");
+    // The failure reason is also written to the server log (email comes from the created invitation).
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[Invite] Email failed for joe@example.com"),
+    );
     // The invitation itself is still created and audited.
     expect(mockedDb.logActivity).toHaveBeenCalledWith(
       expect.objectContaining({ action: "INVITE", entityId: 7 }),
     );
+    warnSpy.mockRestore();
   });
 
   it("reflects unconfigured email settings in the response", async () => {
@@ -114,6 +120,7 @@ describe("createInvitation email reporting", () => {
       sent: false,
       error: "RESEND_API_KEY or EMAIL_FROM is not configured.",
     });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const caller = appRouter.createCaller(context());
     const result = await caller.admin.createInvitation({
       email: "staff@example.com",
@@ -125,5 +132,6 @@ describe("createInvitation email reporting", () => {
     expect(result.emailError).toBe(
       "RESEND_API_KEY or EMAIL_FROM is not configured.",
     );
+    warnSpy.mockRestore();
   });
 });
