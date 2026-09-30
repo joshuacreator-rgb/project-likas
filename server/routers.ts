@@ -729,7 +729,7 @@ export const appRouter = router({
         return { reportId: input.reportId, assignedResponderId: ctx.user.id };
       }),
     alerts: roleProcedure(allowedRoles).query(() => listAlerts()),
-    notifyResponders: roleProcedure(["admin", "staff", "responder"]).input(z.object({ incidentId: z.string().min(1), incidentType: z.string().min(2), location: z.string().min(2), priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]) })).mutation(async ({ ctx, input }) => {
+    notifyResponders: roleProcedure(["admin", "staff"]).input(z.object({ incidentId: z.string().min(1), incidentType: z.string().min(2), location: z.string().min(2), priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]) })).mutation(async ({ ctx, input }) => {
       const result = await createAlert({ title: `${input.priority} incident: ${input.incidentType}`, message: `${input.incidentId} requires responder attention at ${input.location}.`, alertType: "INCIDENT_ASSIGNMENT", priority: input.priority, targetAudience: "RESPONDERS", createdBy: ctx.user.id });
       await logActivity({ actorId: ctx.user.id, action: "NOTIFY_RESPONDERS", entityType: "risk_report", metadata: JSON.stringify({ incidentId: input.incidentId, alertId: result.id }) });
       const notifyAlert = await getAlertById(result.id);

@@ -66,8 +66,6 @@ import { toast } from "sonner";
 import CitizenHome from "./CitizenHome";
 import RoleOnboarding from "@/components/RoleOnboarding";
 import {
-  Area,
-  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
@@ -77,16 +75,6 @@ import {
   YAxis,
 } from "recharts";
 import { useLocation } from "wouter";
-
-const occupancy = [
-  { day: "Mon", value: 61 },
-  { day: "Tue", value: 66 },
-  { day: "Wed", value: 64 },
-  { day: "Thu", value: 70 },
-  { day: "Fri", value: 75 },
-  { day: "Sat", value: 73 },
-  { day: "Sun", value: 78 },
-];
 const centerData = [
   {
     name: "R. Tolentino",
@@ -191,6 +179,17 @@ type IncidentSummary = {
   resolution?: string | null;
   assignedResponderId?: number | null;
 };
+function relativeTime(value: string | Date | undefined): string {
+  if (!value) return "recently";
+  const seconds = Math.floor((Date.now() - new Date(value).getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
 const staticCentersStorageKey = "likas-static-centers";
 const staticResourcesStorageKey = "likas-static-resources";
 const staticReportsStorageKey = "likas-static-reports";
@@ -398,19 +397,97 @@ export default function Home() {
     return () => source.close();
   }, [user, staticSession, utils]);
   const isResponder = user?.role === "responder";
-  const { data: responderRiskReports } = trpc.operations.reports.useQuery(undefined, {
-    enabled: isResponder && !staticSession,
+  const { data: liveReports } = trpc.operations.reports.useQuery(undefined, {
+    enabled:
+      !staticSession &&
+      Boolean(user) &&
+      (isAdmin || isStaff || isResponder),
     refetchInterval: 1500,
     refetchOnWindowFocus: true,
   });
+  const { data: liveResources } = trpc.operations.resources.useQuery(
+    {},
+    {
+      enabled: !staticSession && (isAdmin || isStaff),
+      refetchInterval: 1500,
+    }
+  );
+  const activeOverviewIncidents = useMemo(
+    () => (liveReports ?? []).filter(report => report.status !== "RESOLVED"),
+    [liveReports]
+  );
+  const belowMinimumResources = useMemo(
+    () =>
+      (liveResources ?? []).filter(resource => resource.quantity <= resource.minimumStock).length,
+    [liveResources]
+  );
+  const availableResourceCount = useMemo(
+    () =>
+      (liveResources ?? []).filter(resource => resource.quantity > resource.minimumStock).length,
+    [liveResources]
+  );
+  const resourceChartData = useMemo(() => {
+    if (staticSession)
+      return [
+        { n: "Food", v: 91 },
+        { n: "Water", v: 84 },
+        { n: "Medicine", v: 72 },
+        { n: "Hygiene", v: 58 },
+        { n: "Blankets", v: 47 },
+      ];
+    const byCategory = new Map<string, number>();
+    for (const resource of liveResources ?? []) {
+      byCategory.set(
+        resource.category,
+        (byCategory.get(resource.category) ?? 0) + resource.quantity
+      );
+    }
+    return Array.from(byCategory.entries())
+      .map(([category, quantity]) => ({ n: category, v: quantity }))
+      .sort((a, b) => b.v - a.v)
+      .slice(0, 6);
+  }, [staticSession, liveResources]);
+  const criticalIncidentCount = activeOverviewIncidents.filter(
+    incident => incident.priority === "CRITICAL"
+  ).length;
+  const unassignedIncidentCount = activeOverviewIncidents.filter(
+    incident => !incident.assignedResponderId
+  ).length;
+  const assignedIncidentCount =
+    activeOverviewIncidents.length - unassignedIncidentCount;
+  const centerUtilization = useMemo(() => {
+    const capacity = Number(liveSummary?.capacity ?? 0);
+    const occupancy = Number(liveSummary?.occupancy ?? 0);
+    if (capacity <= 0) return 0;
+    return Math.min(100, Math.round((occupancy / capacity) * 100));
+  }, [liveSummary]);
+  const readinessPercent = useMemo(() => {
+    if (staticSession) return 86;
+    const total = activeOverviewIncidents.length;
+    if (total === 0) return 0;
+    return Math.round(
+      (activeOverviewIncidents.filter(incident => incident.assignedResponderId).length /
+        total) *
+        100
+    );
+  }, [staticSession, activeOverviewIncidents]);
+  const { data: liveWeather } = trpc.operations.weather.useQuery(undefined, {
+    enabled: Boolean(user),
+    refetchInterval: 60000,
+  });
+  const [lastSynced, setLastSynced] = useState(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setLastSynced(new Date()), 15000);
+    return () => window.clearInterval(id);
+  }, []);
   const pendingCitizenReportCount = useMemo(
     () =>
-      (responderRiskReports ?? []).filter(
+      (liveReports ?? []).filter(
         report =>
           report.status === "PENDING" &&
           /citizen emergency/i.test(report.reportType)
       ).length,
-    [responderRiskReports]
+    [liveReports]
   );
   useEffect(() => {
     const navigation = performance.getEntriesByType("navigation")[0] as
@@ -425,32 +502,51 @@ export default function Home() {
     if (sessionStorage.getItem("likas-static-demo-role")) return;
     if (navigation?.type === "reload") navigate("/login");
   }, [navigate]);
-  const displayCenters = useMemo(
-    () =>
-      (staticSession ? staticCenters : liveCenters)?.length
-        ? (staticSession ? staticCenters : liveCenters)!.map(center => ({
-            name: center.name,
-            value: center.currentOccupancy,
-            capacity: center.maximumCapacity,
-            status:
-              center.status === "OPEN" &&
-              center.currentOccupancy / center.maximumCapacity > 0.85
-                ? "NEAR FULL"
-                : center.status,
-            tone: center.status === "FULL" ? "amber" : "teal",
-          }))
-        : centerData,
-    [staticCenters, staticSession]
-  );
-  const visibleIncidents = useMemo(
-    () =>
-      incidents.filter(
-        item =>
-          (incidentFilter === "All" || item.priority === incidentFilter) &&
-          `${item.id} ${item.type} ${item.location} ${item.priority}`.toLowerCase().includes(search.trim().toLowerCase())
-      ),
-    [incidentFilter, search]
-  );
+  const displayCenters = useMemo(() => {
+    const source = staticSession ? staticCenters : liveCenters;
+    if (!source?.length) return staticSession ? centerData : [];
+    return source.map(center => ({
+      name: center.name,
+      value: center.currentOccupancy,
+      capacity: center.maximumCapacity,
+      status:
+        center.status === "OPEN" &&
+        center.currentOccupancy / center.maximumCapacity > 0.85
+          ? "NEAR FULL"
+          : center.status,
+      tone: center.status === "FULL" ? "amber" : "teal",
+    }));
+  }, [liveCenters, staticCenters, staticSession]);
+  const queueIncidents = useMemo(() => {
+    const source = staticSession
+      ? incidents
+      : (liveReports ?? [])
+          .filter(report => report.status !== "RESOLVED")
+          .map(report => ({
+            id: report.reportCode,
+            type: report.reportType,
+            location: report.location,
+            priority: report.priority,
+            time: report.createdAt ? relativeTime(report.createdAt) : "recently",
+            color:
+              report.priority === "CRITICAL"
+                ? "rose"
+                : report.priority === "HIGH"
+                  ? "amber"
+                  : "blue",
+            reportId: report.id,
+            status: report.status,
+            createdAt: report.createdAt,
+            assignedResponderId: report.assignedResponderId ?? null,
+          }));
+    return source.filter(
+      item =>
+        (incidentFilter === "All" || item.priority === incidentFilter) &&
+        `${item.id} ${item.type} ${item.location} ${item.priority}`
+          .toLowerCase()
+          .includes(search.trim().toLowerCase())
+    );
+  }, [staticSession, liveReports, incidentFilter, search]);
   const visibleCenters = useMemo(
     () =>
       displayCenters.filter(
@@ -478,6 +574,7 @@ export default function Home() {
           { label: "Incident map", icon: MapIcon },
           { label: "Risk reports", icon: AlertTriangle },
           { label: "Alerts", icon: Bell },
+          { label: "Security", icon: ShieldCheck },
         ]
       : user?.role === "staff"
         ? [
@@ -614,10 +711,14 @@ export default function Home() {
           <div className="readiness-card">
             <div className="readiness-head">
               <span>Response readiness</span>
-              <span>86%</span>
+              <span>{readinessPercent}%</span>
             </div>
-            <Progress value={86} />
-            <small>All critical systems operational</small>
+            <Progress value={readinessPercent} />
+            <small>
+              {activeOverviewIncidents.length === 0
+                ? "No active incidents — team ready"
+                : `${assignedIncidentCount} of ${activeOverviewIncidents.length} active incidents assigned`}
+            </small>
           </div>
           <div className="signed-user">
             <div className="avatar">{user?.name?.[0] || "A"}</div>
@@ -710,11 +811,19 @@ export default function Home() {
               </div>
               <div>
                 <strong>
-                  29° <span>Partly cloudy</span>
+                  {liveWeather?.temperature != null
+                    ? `${Math.round(liveWeather.temperature)}°`
+                    : "—"}{" "}
+                  <span>{liveWeather?.condition ?? "Weather"}</span>
                 </strong>
-                <small>Rain watch · 60% humidity</small>
+                <small>
+                  {liveWeather?.warning ??
+                    `Live weather · ${liveWeather?.provider ?? "unavailable"}`}
+                </small>
               </div>
-              <span className="weather-place">Pateros</span>
+              <span className="weather-place">
+                {liveWeather?.location ?? "Pateros"}
+              </span>
             </div>
           </section>
 
@@ -724,9 +833,11 @@ export default function Home() {
                 <Building2 size={18} />
               </div>
               <span>Evacuation centers</span>
-              <strong>{liveSummary?.centers || 12}</strong>
+              <strong>{liveSummary?.centers ?? 0}</strong>
               <small>
-                <b>10 open</b> · 2 on standby
+                <b>{liveCenters?.filter(c => c.status === "OPEN").length ?? 0} open</b>
+                {" · "}
+                {liveSummary?.availableSlots ?? 0} slots free
               </small>
             </div>
             <div className="metric-card">
@@ -734,9 +845,11 @@ export default function Home() {
                 <Users size={18} />
               </div>
               <span>Registered evacuees</span>
-              <strong>{liveSummary?.evacuees || 337}</strong>
+              <strong>{liveSummary?.evacuees ?? 0}</strong>
               <small>
-                <b className="up">↑ 8.4%</b> vs yesterday
+                <b>{liveSummary?.occupancy ?? 0} occupying</b>
+                {" · "}
+                {liveSummary?.capacity ?? 0} total capacity
               </small>
             </div>
             <div className="metric-card">
@@ -744,9 +857,12 @@ export default function Home() {
                 <Package size={18} />
               </div>
               <span>Available resources</span>
-              <strong>84%</strong>
+              <strong>{liveSummary?.resources ?? 0}</strong>
               <small>
-                <b className="warning">7</b> items below minimum
+                <b className={belowMinimumResources > 0 ? "warning" : ""}>
+                  {belowMinimumResources} items
+                </b>{" "}
+                below minimum
               </small>
             </div>
             <div className="metric-card">
@@ -754,9 +870,13 @@ export default function Home() {
                 <AlertTriangle size={18} />
               </div>
               <span>Active incidents</span>
-              <strong>{liveAlerts?.length || 8}</strong>
+              <strong>{activeOverviewIncidents.length}</strong>
               <small>
-                <b className="critical">2 critical</b> · 3 unassigned
+                <b className={criticalIncidentCount > 0 ? "critical" : ""}>
+                  {criticalIncidentCount} critical
+                </b>
+                {" · "}
+                {unassignedIncidentCount} unassigned
               </small>
             </div>
           </section>
@@ -765,58 +885,23 @@ export default function Home() {
             <div className="panel occupancy-panel">
               <div className="panel-head">
                 <div>
-                  <h2>Occupancy trend</h2>
-                  <p>Average center utilization · last 7 days</p>
+                  <h2>Center utilization</h2>
+                  <p>Live occupancy against total capacity</p>
                 </div>
                 <StatusPill>LIVE</StatusPill>
               </div>
               <div className="chart-stat">
-                <strong>78.4%</strong>
-                <span className="up">↑ 6.2%</span>
-                <small>Current occupancy</small>
+                <strong>{centerUtilization}%</strong>
+                <small>
+                  {liveSummary?.occupancy ?? 0} occupying ·{" "}
+                  {liveSummary?.availableSlots ?? 0} slots open
+                </small>
               </div>
-              <div className="area-chart">
-                <ResponsiveContainer width="100%" height={178}>
-                  <AreaChart data={occupancy}>
-                    <defs>
-                      <linearGradient id="fillBlue" x1="0" y1="0" x2="0" y2="1">
-                        <stop
-                          offset="0%"
-                          stopColor="#1b8f86"
-                          stopOpacity={0.24}
-                        />
-                        <stop
-                          offset="100%"
-                          stopColor="#1b8f86"
-                          stopOpacity={0}
-                        />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid vertical={false} stroke="#e9efee" />
-                    <XAxis
-                      dataKey="day"
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fill: "#869393", fontSize: 11 }}
-                    />
-                    <YAxis hide domain={[40, 90]} />
-                    <Tooltip
-                      contentStyle={{
-                        borderRadius: 10,
-                        border: "1px solid #e1e9e7",
-                        boxShadow: "0 8px 24px #173c3820",
-                      }}
-                      formatter={value => [`${value}%`, "Occupancy"]}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="value"
-                      stroke="#17877f"
-                      strokeWidth={2.5}
-                      fill="url(#fillBlue)"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+              <div className="occupancy-util">
+                <Progress value={centerUtilization} />
+                <small>
+                  of {liveSummary?.capacity ?? 0} total capacity across centers
+                </small>
               </div>
             </div>
             <div className="panel centers-panel">
@@ -825,12 +910,14 @@ export default function Home() {
                   <h2>Center status</h2>
                   <p>Capacity and occupancy at a glance</p>
                 </div>
-                <button
-                  className="text-button"
-                  onClick={() => setActive("Evacuation centers")}
-                >
-                  View all <ChevronRight size={14} />
-                </button>
+                {user?.role !== "responder" && (
+                  <button
+                    className="text-button"
+                    onClick={() => setActive("Evacuation centers")}
+                  >
+                    View all <ChevronRight size={14} />
+                  </button>
+                )}
               </div>
               <div className="center-list">
                 {visibleCenters.map(center => (
@@ -855,12 +942,15 @@ export default function Home() {
                     <StatusPill tone={center.tone}>{center.status}</StatusPill>
                   </div>
                 ))}
+                {visibleCenters.length === 0 && (
+                  <p className="empty-copy">No centers available yet.</p>
+                )}
               </div>
             </div>
           </section>
 
           <section className="lower-grid">
-            {user?.role !== "admin" && <div className="panel incidents-panel">
+            {isResponder && <div className="panel incidents-panel">
               <div className="panel-head">
                 <div>
                   <h2>Incident queue</h2>
@@ -879,7 +969,7 @@ export default function Home() {
                 </div>
               </div>
               <div className="incident-list">
-                {visibleIncidents.map(incident => (
+                {queueIncidents.map(incident => (
                   <button
                     className="incident-row"
                     key={incident.id}
@@ -904,6 +994,12 @@ export default function Home() {
                     <ChevronRight size={16} className="row-arrow" />
                   </button>
                 ))}
+                {queueIncidents.length === 0 && (
+                  <p className="empty-copy">
+                    No active incidents right now. New reports will appear here
+                    live.
+                  </p>
+                )}
               </div>
               <button
                 className="panel-footer-action"
@@ -912,11 +1008,11 @@ export default function Home() {
                 Open incident workspace <ChevronRight size={15} />
               </button>
             </div>}
-            <div className="panel resources-panel">
+            {(isAdmin || isStaff) && <div className="panel resources-panel">
               <div className="panel-head">
                 <div>
                   <h2>Resource availability</h2>
-                  <p>Across all active centers</p>
+                  <p>Live stock across operational centers</p>
                 </div>
                 <button
                   className="text-button"
@@ -926,56 +1022,53 @@ export default function Home() {
                 </button>
               </div>
               <div className="resource-chart">
-                <ResponsiveContainer width="100%" height={176}>
-                  <BarChart
-                    data={[
-                      { n: "Food", v: 91 },
-                      { n: "Water", v: 84 },
-                      { n: "Medicine", v: 72 },
-                      { n: "Hygiene", v: 58 },
-                      { n: "Blankets", v: 47 },
-                    ]}
-                    layout="vertical"
-                    margin={{ left: 4, right: 12 }}
-                  >
-                    <XAxis type="number" hide domain={[0, 100]} />
-                    <YAxis
-                      dataKey="n"
-                      type="category"
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fill: "#687b79", fontSize: 11 }}
-                      width={62}
-                    />
-                    <Tooltip
-                      cursor={{ fill: "#f3f7f6" }}
-                      contentStyle={{
-                        borderRadius: 10,
-                        border: "1px solid #e1e9e7",
-                      }}
-                      formatter={value => [`${value}%`, "Available"]}
-                    />
-                    <Bar
-                      dataKey="v"
-                      fill="#d2e4df"
-                      radius={[0, 5, 5, 0]}
-                      barSize={13}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
+                {resourceChartData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={176}>
+                    <BarChart
+                      data={resourceChartData}
+                      layout="vertical"
+                      margin={{ left: 4, right: 12 }}
+                    >
+                      <XAxis type="number" hide />
+                      <YAxis
+                        dataKey="n"
+                        type="category"
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fill: "#687b79", fontSize: 11 }}
+                        width={72}
+                      />
+                      <Tooltip
+                        cursor={{ fill: "#f3f7f6" }}
+                        contentStyle={{
+                          borderRadius: 10,
+                          border: "1px solid #e1e9e7",
+                        }}
+                        formatter={value => [`${value}`, "Units on hand"]}
+                      />
+                      <Bar
+                        dataKey="v"
+                        fill="#51b9ac"
+                        radius={[0, 5, 5, 0]}
+                        barSize={13}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <p className="empty-copy">
+                    No resources have been recorded yet.
+                  </p>
+                )}
               </div>
               <div className="resource-footer">
                 <span>
-                  <i className="dot teal" /> Healthy stock
+                  <i className="dot teal" /> {availableResourceCount} healthy
                 </span>
                 <span>
-                  <i className="dot amber" /> Below minimum
-                </span>
-                <span>
-                  <i className="dot rose" /> Critical
+                  <i className="dot amber" /> {belowMinimumResources} below minimum
                 </span>
               </div>
-            </div>
+            </div>}
           </section>
 
           <section className="map-alert-grid">
@@ -987,17 +1080,15 @@ export default function Home() {
                 </div>
                 <div className="map-tools">
                   <div className="map-filter-tabs">
-                    {["All", "Centers", "Incidents", "Resources"].map(
-                      filter => (
-                        <button
-                          key={filter}
-                          className={mapFilter === filter ? "selected" : ""}
-                          onClick={() => setMapFilter(filter)}
-                        >
-                          {filter}
-                        </button>
-                      )
-                    )}
+                    {["All", "Centers", "Incidents"].map(filter => (
+                      <button
+                        key={filter}
+                        className={mapFilter === filter ? "selected" : ""}
+                        onClick={() => setMapFilter(filter)}
+                      >
+                        {filter}
+                      </button>
+                    ))}
                   </div>
                   <div className="map-legend">
                     <span>
@@ -1005,9 +1096,6 @@ export default function Home() {
                     </span>
                     <span>
                       <i className="map-dot rose" /> Incidents
-                    </span>
-                    <span>
-                      <i className="map-dot amber" /> Resources
                     </span>
                   </div>
                 </div>
@@ -1025,90 +1113,147 @@ export default function Home() {
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                   />
                   <MapZoomReset />
-                  {(mapFilter === "All" || mapFilter === "Centers") && (
+                  {staticSession ? (
                     <>
-                      <CircleMarker
-                        center={[14.546, 121.074]}
-                        radius={10}
-                        pathOptions={{
-                          color: "#177f78",
-                          fillColor: "#31b1a5",
-                          fillOpacity: 0.9,
-                        }}
-                      >
-                        <Popup>
-                          <strong>Rizal Tolentino Center</strong>
-                          <br />
-                          82 / 120 occupants · OPEN
-                        </Popup>
-                      </CircleMarker>
-                      <CircleMarker
-                        center={[14.548, 121.066]}
-                        radius={10}
-                        pathOptions={{
-                          color: "#177f78",
-                          fillColor: "#31b1a5",
-                          fillOpacity: 0.9,
-                        }}
-                      >
-                        <Popup>
-                          <strong>M. L. Quezon Center</strong>
-                          <br />
-                          48 / 80 occupants · OPEN
-                        </Popup>
-                      </CircleMarker>
+                      {(mapFilter === "All" || mapFilter === "Centers") && (
+                        <>
+                          <CircleMarker
+                            center={[14.546, 121.074]}
+                            radius={10}
+                            pathOptions={{
+                              color: "#177f78",
+                              fillColor: "#31b1a5",
+                              fillOpacity: 0.9,
+                            }}
+                          >
+                            <Popup>
+                              <strong>Rizal Tolentino Center</strong>
+                              <br />
+                              82 / 120 occupants · OPEN
+                            </Popup>
+                          </CircleMarker>
+                          <CircleMarker
+                            center={[14.548, 121.066]}
+                            radius={10}
+                            pathOptions={{
+                              color: "#177f78",
+                              fillColor: "#31b1a5",
+                              fillOpacity: 0.9,
+                            }}
+                          >
+                            <Popup>
+                              <strong>M. L. Quezon Center</strong>
+                              <br />
+                              48 / 80 occupants · OPEN
+                            </Popup>
+                          </CircleMarker>
+                        </>
+                      )}
+                      {(mapFilter === "All" || mapFilter === "Incidents") && (
+                        <>
+                          <CircleMarker
+                            center={[14.541, 121.068]}
+                            radius={10}
+                            pathOptions={{
+                              color: "#c85f5a",
+                              fillColor: "#ef8b82",
+                              fillOpacity: 0.9,
+                            }}
+                          >
+                            <Popup>
+                              <strong>RPT-2408 · Flooding</strong>
+                              <br />
+                              Brgy. Sta. Ana · CRITICAL
+                            </Popup>
+                          </CircleMarker>
+                          <CircleMarker
+                            center={[14.537, 121.075]}
+                            radius={10}
+                            pathOptions={{
+                              color: "#d89b3f",
+                              fillColor: "#f3be61",
+                              fillOpacity: 0.9,
+                            }}
+                          >
+                            <Popup>
+                              <strong>RPT-2407 · Road blockage</strong>
+                              <br />
+                              B. Morcilla St. · HIGH
+                            </Popup>
+                          </CircleMarker>
+                        </>
+                      )}
                     </>
-                  )}
-                  {(mapFilter === "All" || mapFilter === "Incidents") && (
+                  ) : (
                     <>
-                      <CircleMarker
-                        center={[14.541, 121.068]}
-                        radius={10}
-                        pathOptions={{
-                          color: "#c85f5a",
-                          fillColor: "#ef8b82",
-                          fillOpacity: 0.9,
-                        }}
-                      >
-                        <Popup>
-                          <strong>RPT-2408 · Flooding</strong>
-                          <br />
-                          Brgy. Sta. Ana · CRITICAL
-                        </Popup>
-                      </CircleMarker>
-                      <CircleMarker
-                        center={[14.537, 121.075]}
-                        radius={10}
-                        pathOptions={{
-                          color: "#d89b3f",
-                          fillColor: "#f3be61",
-                          fillOpacity: 0.9,
-                        }}
-                      >
-                        <Popup>
-                          <strong>RPT-2407 · Road blockage</strong>
-                          <br />
-                          B. Morcilla St. · HIGH
-                        </Popup>
-                      </CircleMarker>
+                      {(mapFilter === "All" || mapFilter === "Centers") &&
+                        (liveCenters ?? [])
+                          .filter(
+                            center =>
+                              center.latitude != null && center.longitude != null
+                          )
+                          .map(center => (
+                            <CircleMarker
+                              key={center.id}
+                              center={[
+                                Number(center.latitude),
+                                Number(center.longitude),
+                              ]}
+                              radius={10}
+                              pathOptions={{
+                                color: "#177f78",
+                                fillColor: "#31b1a5",
+                                fillOpacity: 0.9,
+                              }}
+                            >
+                              <Popup>
+                                <strong>{center.name}</strong>
+                                <br />
+                                {center.currentOccupancy} /{" "}
+                                {center.maximumCapacity} occupants ·{" "}
+                                {center.status}
+                              </Popup>
+                            </CircleMarker>
+                          ))}
+                      {(mapFilter === "All" || mapFilter === "Incidents") &&
+                        (liveReports ?? [])
+                          .filter(
+                            report =>
+                              report.status !== "RESOLVED" &&
+                              report.latitude != null &&
+                              report.longitude != null
+                          )
+                          .map(report => (
+                            <CircleMarker
+                              key={report.id}
+                              center={[
+                                Number(report.latitude),
+                                Number(report.longitude),
+                              ]}
+                              radius={10}
+                              pathOptions={{
+                                color:
+                                  report.priority === "CRITICAL"
+                                    ? "#c85f5a"
+                                    : "#d89b3f",
+                                fillColor:
+                                  report.priority === "CRITICAL"
+                                    ? "#ef8b82"
+                                    : "#f3be61",
+                                fillOpacity: 0.9,
+                              }}
+                            >
+                              <Popup>
+                                <strong>
+                                  {report.reportCode} · {report.reportType}
+                                </strong>
+                                <br />
+                                {report.location} · {report.priority} ·{" "}
+                                {report.status}
+                              </Popup>
+                            </CircleMarker>
+                          ))}
                     </>
-                  )}
-                  {(mapFilter === "All" || mapFilter === "Resources") && (
-                    <CircleMarker
-                      center={[14.543, 121.078]}
-                      radius={8}
-                      pathOptions={{
-                        color: "#d89b3f",
-                        fillColor: "#f3be61",
-                        fillOpacity: 0.9,
-                      }}
-                    >
-                      <Popup>
-                        <strong>Resource cache · Pateros HQ</strong>
-                        <br />
-                        Water, hygiene kits, and blankets · LOW STOCK
-                      </Popup>
-                    </CircleMarker>
                   )}
                 </MapContainer>
                 <div className="map-overlay">
@@ -1167,7 +1312,7 @@ export default function Home() {
               <span className="live-dot" /> All systems operational
             </span>
             <span>
-              Last synced 14:32:08 ·{" "}
+              Last synced {lastSynced.toLocaleTimeString()} ·{" "}
               <button onClick={() => setSubmitted(false)}>Refresh data</button>
             </span>
             <span>
@@ -1324,7 +1469,23 @@ export default function Home() {
                 )
               )}
             </div>
-            {responderNotified ? <div className="incident-notified" role="status"><CheckCircle2 size={18} /> Responder / Disaster Team has been notified.</div> : <Button onClick={handleNotifyResponders} disabled={notifyResponders.isPending}>{notifyResponders.isPending ? "Notifying responders…" : "Notify responder / disaster team"}<Bell size={17} /></Button>}
+            {(isAdmin || isStaff) &&
+              (responderNotified ? (
+                <div className="incident-notified" role="status">
+                  <CheckCircle2 size={18} /> Responder / Disaster Team has been
+                  notified.
+                </div>
+              ) : (
+                <Button
+                  onClick={handleNotifyResponders}
+                  disabled={notifyResponders.isPending}
+                >
+                  {notifyResponders.isPending
+                    ? "Notifying responders…"
+                    : "Notify responder / disaster team"}
+                  <Bell size={17} />
+                </Button>
+              ))}
             {notifyResponders.error && <p className="login-error" role="alert">{notifyResponders.error.message}</p>}
           </div>
         </div>
@@ -1505,6 +1666,27 @@ function WorkspaceView({
   });
   const incidentReports = isStaticSession() ? staticReports : liveReports;
   const activeIncidentReports = incidentReports?.filter(report => report.status !== "RESOLVED");
+  const assignedToMeCount =
+    activeIncidentReports?.filter(report => report.assignedResponderId === user?.id).length ?? 0;
+  const claimableCount =
+    activeIncidentReports?.filter(report => !report.assignedResponderId).length ?? 0;
+  const twoFactorQuery = trpc.security.twoFactorStatus.useQuery(undefined, {
+    enabled: active === "Security" && user?.role === "responder" && !isStaticSession(),
+  });
+  const beginTwoFactorSetupMutation = trpc.security.beginTwoFactorSetup.useMutation({
+    onSuccess: () => twoFactorQuery.refetch(),
+  });
+  const confirmTwoFactorSetupMutation = trpc.security.confirmTwoFactorSetup.useMutation({
+    onSuccess: () => twoFactorQuery.refetch(),
+  });
+  const disableTwoFactorMutation = trpc.security.disableTwoFactor.useMutation({
+    onSuccess: () => twoFactorQuery.refetch(),
+  });
+  const [twoFactorCode, setTwoFactorCode] = useState("");
+  const [twoFactorSetup, setTwoFactorSetup] = useState<{
+    secret: string;
+    otpauthUrl: string;
+  } | null>(null);
   function markIncidentDone(reportId: number) {
     if (isStaticSession()) {
       const nextReports = (incidentReports ?? []).map(report =>
@@ -1541,7 +1723,7 @@ function WorkspaceView({
   const allowedWorkspaces: Record<string, string[]> = {
     admin: ["Evacuation centers", "Evacuees", "Resources", "Incident map", "Risk reports", "Alerts", "Activity log", "Settings", "User & roles"],
     staff: ["Overview", "Evacuation centers", "Evacuees", "Resources", "Alerts"],
-    responder: ["Overview", "Incident map", "Risk reports", "Alerts"],
+    responder: ["Overview", "Incident map", "Risk reports", "Alerts", "Security"],
   };
   const inviteMutation = trpc.admin.createInvitation.useMutation({
     onSuccess: () => {
@@ -1827,7 +2009,21 @@ function WorkspaceView({
     link.click();
     URL.revokeObjectURL(url);
   }
-  if (active !== "Overview" && !allowedWorkspaces[user?.role || ""]?.includes(active)) return null;
+  if (active !== "Overview" && !allowedWorkspaces[user?.role || ""]?.includes(active))
+    return (
+      <section className="workspace-view panel">
+        <div className="workspace-view-head">
+          <div>
+            <span className="eyebrow">ACCESS</span>
+            <h2>{active}</h2>
+            <p>
+              This workspace isn't available for your role. Ask an
+              administrator if you need access.
+            </p>
+          </div>
+        </div>
+      </section>
+    );
   if (active === "Activity log")
     return (
       <section className="workspace-view panel">
@@ -2274,8 +2470,21 @@ function WorkspaceView({
           <div>
             <span className="eyebrow">GEO OPERATIONS</span>
             <h2>Incident map</h2>
-            <p>Live incident locations assigned to your response workspace.</p>
+            <p>Live incident locations and the operational response queue.</p>
           </div>
+          {user?.role === "responder" && (
+            <div className="incident-meta">
+              <span className="incident-meta-item">
+                <b>{(activeIncidentReports ?? []).length}</b> active
+              </span>
+              <span className="incident-meta-item">
+                <b>{assignedToMeCount}</b> assigned to you
+              </span>
+              <span className="incident-meta-item">
+                <b>{claimableCount}</b> unassigned · claimable
+              </span>
+            </div>
+          )}
         </div>
         <div className="responder-map-layout">
           <div className="responder-map-frame">
@@ -2306,11 +2515,162 @@ function WorkspaceView({
                 </div>
               </article>
             ))}
-            {!activeIncidentReports?.length && <p className="empty-copy">No assigned incidents are available.</p>}
+            {!activeIncidentReports?.length && (
+              <p className="empty-copy">
+                No active incidents right now. New reports from citizens will
+                appear here in real time.
+              </p>
+            )}
           </div>
         </div>
       </section>
     );
+  if (active === "Security") {
+    const status = twoFactorQuery.data;
+    return (
+      <section className="workspace-view panel">
+        <div className="workspace-view-head">
+          <div>
+            <span className="eyebrow">ACCOUNT SECURITY</span>
+            <h2>Two-factor authentication</h2>
+            <p>
+              Protect your responder account with a time-based one-time code.
+            </p>
+          </div>
+        </div>
+        <div className="security-2fa">
+          {status?.enabled ? (
+            <div className="security-card">
+              <div className="security-card-head">
+                <ShieldCheck size={18} />
+                <strong>Two-factor authentication is on</strong>
+              </div>
+              <p>
+                Your account requires a verification code from your
+                authenticator app when you sign in.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => disableTwoFactorMutation.mutate()}
+                disabled={disableTwoFactorMutation.isPending}
+              >
+                {disableTwoFactorMutation.isPending ? "Disabling…" : "Disable 2FA"}
+              </Button>
+              {disableTwoFactorMutation.error && (
+                <p className="login-error" role="alert">
+                  {disableTwoFactorMutation.error.message}
+                </p>
+              )}
+            </div>
+          ) : twoFactorSetup ? (
+            <div className="security-card">
+              <div className="security-card-head">
+                <ShieldCheck size={18} />
+                <strong>Add this account to your authenticator app</strong>
+              </div>
+              <p>
+                Open Google Authenticator, 1Password, or another authenticator
+                app and add this secret, then enter the 6-digit code it shows to
+                confirm.
+              </p>
+              <div className="security-secret">
+                <code>{twoFactorSetup.secret}</code>
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() =>
+                    navigator.clipboard?.writeText(twoFactorSetup.secret)
+                  }
+                >
+                  Copy
+                </button>
+              </div>
+              <p className="security-hint">
+                Or open directly in your authenticator:{" "}
+                <a
+                  href={twoFactorSetup.otpauthUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  otpauth link
+                </a>
+              </p>
+              <div className="security-code-row">
+                <Input
+                  value={twoFactorCode}
+                  onChange={e =>
+                    setTwoFactorCode(
+                      e.target.value.replace(/\D/g, "").slice(0, 6)
+                    )
+                  }
+                  placeholder="6-digit code"
+                  inputMode="numeric"
+                  maxLength={6}
+                  aria-label="Verification code"
+                />
+                <Button
+                  type="button"
+                  onClick={() =>
+                    confirmTwoFactorSetupMutation.mutate({ code: twoFactorCode })
+                  }
+                  disabled={
+                    twoFactorCode.length !== 6 ||
+                    confirmTwoFactorSetupMutation.isPending
+                  }
+                >
+                  {confirmTwoFactorSetupMutation.isPending
+                    ? "Confirming…"
+                    : "Confirm"}
+                </Button>
+              </div>
+              {confirmTwoFactorSetupMutation.error && (
+                <p className="login-error" role="alert">
+                  {confirmTwoFactorSetupMutation.error.message}
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="security-card">
+              <div className="security-card-head">
+                <ShieldCheck size={18} />
+                <strong>Two-factor authentication is off</strong>
+              </div>
+              <p>
+                Adding 2FA requires a code from your phone whenever you sign in,
+                keeping your responder account safer even if your password is
+                compromised.
+              </p>
+              <Button
+                type="button"
+                onClick={() =>
+                  beginTwoFactorSetupMutation.mutate(undefined, {
+                    onSuccess: data => {
+                      setTwoFactorSetup(data);
+                      setTwoFactorCode("");
+                    },
+                  })
+                }
+                disabled={beginTwoFactorSetupMutation.isPending}
+              >
+                {beginTwoFactorSetupMutation.isPending
+                  ? "Preparing…"
+                  : "Enable 2FA"}
+              </Button>
+              {beginTwoFactorSetupMutation.error && (
+                <p className="login-error" role="alert">
+                  {beginTwoFactorSetupMutation.error.message}
+                </p>
+              )}
+            </div>
+          )}
+          {!status && !twoFactorQuery.isLoading && (
+            <p className="empty-copy">Unable to load security status.</p>
+          )}
+        </div>
+      </section>
+    );
+  }
   if (active === "Risk reports") {
     const allReports = isStaticSession() ? staticReports : (liveReports ?? []);
     const filteredReports = allReports.filter(report =>

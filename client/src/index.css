@@ -181,3 +181,25 @@ button { cursor:pointer; }
 .assignment-select-label select { width: 100%; min-height: 40px; border: 1px solid #bfd6d0; border-radius: 10px; background: #fff; padding: 0 10px; color: #173f3a; font: inherit; }
 .assignment-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .assignment-other { display: flex; align-items: center; gap: 8px; color: #6f8580; font-size: 14px; }
+
+/* Phase 3: honest center utilization block on the Overview. */
+.occupancy-util { display: grid; gap: 0.6rem; padding: 0.25rem 0 0; }
+.occupancy-util [data-slot="progress"] { height: 10px; }
+.occupancy-util [data-slot="progress-indicator"] { background: linear-gradient(90deg, #2ba99c, #1b8f86); }
+.occupancy-util small { color: #6b7f7b; font-size: 11px; }
+
+/* Phase 3: responder incident-map assignment legend. */
+.incident-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.incident-meta-item { display: inline-flex; align-items: baseline; gap: 5px; font-size: 11px; color: #6b7f7b; background: #f2f8f6; border: 1px solid #dcebe6; border-radius: 20px; padding: 4px 10px; }
+.incident-meta-item b { color: #173f3a; font-size: 12px; }
+
+/* Phase 3: responder 2FA enrollment workspace. */
+.security-2fa { max-width: 640px; }
+.security-card-head { display: flex; align-items: center; gap: 9px; color: #143f3a; }
+.security-card-head svg { color: #1b8f86; }
+.security-secret { display: flex; align-items: center; gap: 10px; background: #fff; border: 1px dashed #b9d8d0; border-radius: 10px; padding: 10px 12px; }
+.security-secret code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.95rem; letter-spacing: 0.08em; color: #173f3a; word-break: break-all; }
+.security-hint { font-size: 12px !important; }
+.security-hint a { color: #137c70; font-weight: 700; }
+.security-code-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.security-code-row input { min-height: 44px; border: 1px solid #bfd6d0; border-radius: 10px; padding: 0 12px; font: inherit; letter-spacing: 0.18em; max-width: 180px; }
