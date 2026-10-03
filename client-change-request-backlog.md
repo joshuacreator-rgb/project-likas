@@ -22,7 +22,7 @@
 |---|---|---|---|
 | A1 | Is Gmail-only registration still correct? | **Yes.** | OQ 4 closed. Gmail-only registration is confirmed as the intended rule. |
 | A2 | Advice videos are expensive — photos instead? | **Photos are acceptable** as the substitute for video. | US-10 created. Video deferred to a follow-on. |
-| A3 | Should the Valid ID block be re-asked? | **Skipped entirely.** | OQ 1, 2 and 3 remain unanswered. Wave 1 stays blocked. |
+| A3 | Should the Valid ID block be re-asked? | **Skipped on the first pass, answered on the second.** OQ 1, 2, 3 and 7 were all answered on 2026-10-03. | Wave 1 unblocked. See section 5. |
 | A4 | Is BFP (Bureau of Fire Protection) a separate role? | **No** — handled by the existing responder role. | No new role needed. Given verbally; *confirm in writing*. |
 | A5 | Should the new registration fields appear in admin reports and exports? | Not answered. | OQ 9 stays open. |
 
@@ -44,11 +44,18 @@ What the client assumes vs. what actually exists in the codebase.
 | Table | Change | Story | Status |
 |---|---|---|---|
 | `users` | add `address`, `age`; reuse existing `phone` for CP number | US-1 | **Applied** — migration `0012` |
-| new | citizen ID documents table | US-2 | Not started — blocked on OQ 1–3 |
+| new | citizen ID documents table — userId, fileKey, idType, idNumberMasked, addressOnId, status, reviewedBy, reviewedAt, rejectionReason, `purgeAfter` | US-2 | Not started — unblocked, design settled |
 | `safety_advice` | new table: slug, category, bilingual title/summary/body, status, `isEmergency`, `sortOrder`, `publishedAt`, `archivedAt`, `createdBy` | US-8 | **Applied** — migration `0013` |
 | `advice_steps` | new child table: `adviceId`, `stepNo`, bilingual title and instruction, `imageUrl`, `imageKey`; composite index on `(adviceId, stepNo)`, `ON DELETE CASCADE` | US-10 | **Applied** — migration `0013` |
 
 Note: `database/project-likas.sql` is the schema reference and **needs regenerating** to include `safety_advice` and `advice_steps`. It was last refreshed in `500dcaaf`.
+
+Two tables will be added for US-2/US-3 in a future wave:
+
+- `citizen_id_documents` — one row per uploaded ID, carrying the review decision and `purgeAfter` (the retention date from 5.1)
+- A review-decision record, or columns on the above — the address read from the ID, who decided, and when. US-3 AC 8 requires the *basis* for an approval to be explainable after the fact
+
+**Storage decision, not yet recorded as code:** ID images must **not** be served from the public `/manus-storage/{key}` proxy that `storagePut` returns (`server/storage.ts:71`). An authenticated serving route with an authorization check and an audit-log write is required. This applies to US-10's step photos too in principle, though those are not personal documents and the risk is lower.
 
 ### 2.2 Pre-existing issues found during review
 
@@ -182,38 +189,51 @@ so that the Municipality can confirm my identity and residency.
    - When I submit
    - Then the form shows an error on the ID field and no account is created
 
+6. Any valid ID is accepted — no whitelist
+   - Given I upload a PhilSys ID, Barangay ID, driver's licence, passport, or another government ID
+   - When I submit
+   - Then the upload is accepted
+   - **The system does not attempt to detect the document type from the image.** Because all valid IDs are accepted (OQ 2), detection would be unreliable. Staff select the type during review and the app records it.
+
+7. The ID number is never stored in full
+   - Given my ID displays a document number
+   - When it is stored
+   - Then only a masked form is kept (for example `1234-****-5678`), sufficient to distinguish two applicants without retaining the full number
+
 **Notes**
 - **Do not reuse `operations.uploadEvidence` as-is.** It is scoped to `risk_reports`, allows any authenticated user, and returns a publicly proxyable `/manus-storage/{key}` URL
-- **Requires new table**, e.g. `citizen_id_documents` (userId, fileKey, idType, idNumberMasked, status, reviewedBy, reviewedAt, rejectionReason)
+- **Requires new table**, e.g. `citizen_id_documents` (userId, fileKey, idType, idNumberMasked, addressOnId, status, reviewedBy, reviewedAt, rejectionReason, purgeAfter)
 - **Builds on**: `storagePut` in `server/storage.ts` (S3 via Forge presign)
-- **Open Questions 1, 2, 3, 4 drive the design of this story**
+- **`purgeAfter` carries the retention date** from section 5.1, so the cleanup job is a single indexed scan rather than a date calculation per row
+- **OQ 1, 2, 3, 4 and 7 are now answered.** See section 5. Three sub-decisions in 5.2 remain open
 
 ---
 
-#### US-3: Administrator reviews the Valid ID and verifies Pateros residency
+#### US-3: Staff review the Valid ID and verify Pateros residency
 
 **Story**
-As an Administrator,
-I want to view an applicant's Valid ID and their declared address side by side,
+As Center Staff or an Administrator,
+I want to view an applicant's Valid ID alongside the address on it,
 so that I only approve residents of Pateros and reject everyone else.
 
 **Type**: Change to existing
 **Priority**: Must
+**Note**: the title previously said "Administrator". Per OQ 7 the client extended this to **Center Staff**, which is a permissions change — see AC 5.
 
 **Acceptance Criteria**
 
 1. Review queue
    - Given citizen accounts are waiting for approval
-   - When I open User & roles
-   - Then each pending applicant shows their Valid ID thumbnail, complete name, declared address, age, and mobile number
+   - When I open the approval queue
+   - Then each pending applicant shows their Valid ID, complete name, declared address, age, and mobile number
 
-2. Approving a verified resident
-   - Given the applicant's ID address matches a Pateros address
+2. Approving a verified resident — *residency is decided by the address on the ID*
+   - Given the address on the applicant's ID places them in Pateros
    - When I click Approve
-   - Then the account becomes APPROVED, the applicant is signed in automatically, and the review is recorded in the Activity log
+   - Then the account becomes APPROVED and the review is recorded in the Activity log
 
 3. Rejecting a non-resident
-   - Given the applicant's ID address is outside Pateros
+   - Given the address on the applicant's ID is outside Pateros
    - When I click Decline and select a reason
    - Then the account becomes REJECTED, the reason is shown to the applicant, and the review is recorded in the Activity log
 
@@ -222,21 +242,35 @@ so that I only approve residents of Pateros and reject everyone else.
    - When I click Decline with reason "Unclear or expired ID"
    - Then the applicant sees that reason and may submit a new ID
 
-5. Access control
-   - Given I am signed in as Evacuation Center Staff, Responder, or Citizen
-   - When I attempt to open the Valid ID review view or the stored file
+5. Center Staff may review — *new permission*
+   - Given I am signed in with the `staff` role
+   - When I open the approval queue and view an applicant's ID
+   - Then I am allowed, and my access and decision are recorded
+   - **Today `updateUserApproval` is `adminProcedure` (`server/routers.ts:1144`), which rejects any role that is not `admin`. This story requires widening it to admit `staff`.** Widening an existing admin-only procedure needs its own authorization tests.
+
+6. Access control
+   - Given I am signed in as Responder or Citizen, or I have no session
+   - When I attempt to open the Valid ID review view or request the stored file
    - Then access is denied and no file is returned
 
-6. Audit
-   - Given any Administrator or staff member opens a stored Valid ID
-   - When the file is opened
+7. Every ID view is audited
+   - Given any staff member or administrator opens a stored Valid ID
+   - When the file is served
    - Then an Activity log entry records who viewed which applicant's ID and when
+   - **The file is never served from a public URL.** Requesting it is what triggers the log entry.
+
+8. Residency is recorded, not just assumed
+   - Given I approve an applicant
+   - When the review completes
+   - Then the address read from the ID, the staff member's decision, and the review date are all stored, so the basis for approval can be explained later
 
 **Notes**
 - **Builds on**: existing `admin.updateUserApproval` (Approve/Decline at `Home.tsx:2243`) and the `activity_logs` table
 - **Business rules**: `updateUserApproval` already rejects non-citizen targets — reuse that guard
-- **Security requirement**: IDs must be served through an authenticated, authorization-checked route — **not** the public `/manus-storage/{key}` proxy
-- **Out of scope**: bulk approval, auto-OCR of the ID number (see US-4)
+- **Security requirement**: IDs must be served through an authenticated, authorization-checked route — **not** the public `/manus-storage/{key}` proxy (`server/storage.ts:71`). This is a hard requirement, not a preference: a publicly fetchable URL for a government ID belonging to a named resident is not acceptable under any retention policy.
+- **Center scoping is open** — see 5.2(b). Recommended: staff see only applicants assigned to their own centre.
+- **Staff delete rights are open** — see 5.2(c). Recommended: staff approve and decline only; deleting the ID record stays admin-only.
+- **Out of scope**: bulk approval, OCR of the ID number or address (see US-4). Staff read the address from the image themselves in Wave 1.
 
 ---
 
@@ -261,7 +295,7 @@ so that I can still get access without starting over.
    - Then my application returns to the Administrator's pending queue and the previous ID is superseded
 
 **Notes**
-- **Why proposed**: the client asked for rejection, but not for recovery. Without it, a blurry photo means a permanently dead account. Highest-value addition in this epic — confirm with the client before building
+- **Why proposed**: the client asked for rejection, but not for recovery. Without it, a blurry photo means a permanently dead account. **This matters more now than it did.** OQ 2 accepts all ID types, so the system cannot verify a document is genuinely an ID — staff judgement is the only control. Residents registering during a disaster are exactly the people most likely to submit an unreadable photo, and a 30-day purge (5.1) means there is a hard window in which they can resubmit. Without US-4, a mis-scan becomes a permanently dead account with no route back.
 
 ---
 
@@ -610,18 +644,42 @@ The video acceptance criteria originally written into US-8 and US-9 are not deli
 
 | # | Question | Client answer | Closed |
 |---|---|---|---|
+| 1 | How is "taga Pateros" proven? | **The address on the Valid ID.** Staff check whether the address places the applicant in Pateros. | 2026-10-03 |
+| 2 | Which IDs are accepted? | **All types of valid ID**, explicitly including PhilSys, Barangay ID and driver's licence. Not a fixed whitelist. | 2026-10-03 |
+| 3 | How long are Valid IDs stored? | **Two-tier retention, accepted from our recommendation** — see 5.1 below for the exact periods and rationale. | 2026-10-03 |
 | 4 | Is the existing Gmail-only registration rule still correct? A senior citizen registering for evacuation support may not have a Gmail address. | **Yes — keep Gmail-only.** | 2026-10-03 |
-| 11 | `database/project-likas.sql` is stale and missing two tables. | Regenerated from the live schema in commit `500dcaaf`. Needs one more refresh now that the advice tables exist. | 2026-10-02 |
+| 7 | Should the Valid ID be visible to Evacuation Center Staff, or Administrators only? | **Center staff.** They can view the ID and approve or decline. This supersedes the earlier "only Administration" answer. | 2026-10-03 |
+| 11 | `database/project-likas.sql` is stale and missing two tables. | Regenerated from the live schema in commit `500dcaaf`. | 2026-10-02 |
 
-### Blocking — cannot build without an answer
+> **Wave 1 is no longer blocked.** OQ 1, 2, 3 and 7 are answered. US-2 and US-3 can start. Three sub-decisions remain open — see 5.2.
 
-The client was asked to answer these on 2026-10-03 and **skipped the entire block**. US-2 and US-3 cannot start until they reply.
+### 5.1 Retention policy (OQ 3, accepted)
 
-| # | Question | Affects |
+| Case | Retention |
+|---|---|
+| **Approved applicant** | Retain the ID image while the account is active. Delete 1 year after the account is deactivated. |
+| **Rejected applicant** | Delete the ID image after **30 days**. Long enough to investigate an appeal or a mis-scan; short enough to defend as "not indefinite". |
+| **Abandoned upload** (never reviewed) | Delete after **30 days** by a scheduled cleanup job. |
+
+Rationale recorded for the client: RA 10173 requires personal data to be kept no longer than necessary for a stated purpose, and requires a specified retention period. Every retained ID is an image of a government document usable for identity fraud, so the stored footprint is kept as small as the operational need allows.
+
+The 30-day figure was chosen over "delete immediately on decline" because residents registering during a disaster are likely to submit blurry or partially readable ID photos, and an immediate delete would force a re-upload and a second queue for a mis-scan.
+
+### 5.2 Open sub-decisions — needed before US-2/US-3 are finished
+
+These do not block starting the work. Each is small, but each changes behaviour.
+
+| # | Question | Our recommendation |
 |---|---|---|
-| 1 | How is "taga Pateros" proven? By the address on the Valid ID? By a declared barangay? Is a Pateros address on the ID enough, or must it be a specific ID type? | US-1, US-2, US-3 |
-| 2 | Which IDs are accepted? PhilSys ID, Barangay ID, driver's license, utility bill, passport? | US-2, US-3 |
-| 3 | How long are Valid IDs stored, especially for rejected applicants? Data privacy law requires a stated retention period. Keeping a rejected applicant's government ID indefinitely is a real legal exposure. | US-2, US-3 |
+| a | An ID shows "Pateros, Metro Manila" but **no barangay**. Accept, or hold for clarification? | Accept it as Pateros. Rejecting a genuine resident over a missing barangay line is the worse failure. |
+| b | Is staff access to IDs **scoped to their own centre**, or all residents everywhere? | Centre-scoped. A staff member at one centre should not see applicants who applied elsewhere. |
+| c | May staff **delete** an ID record, or only approve/decline? | Approve/decline only. Delete is irreversible and stays admin-only. |
+
+Also note: because OQ 2 accepts all valid ID types, the system cannot reliably detect the ID type from the image. Staff select the type when reviewing, and the app records it. Confirm that is acceptable rather than attempting automatic detection.
+
+### 5.3 Blocking — cannot build without an answer
+
+None. OQ 1, 2, 3 and 7 were all answered on 2026-10-03.
 
 ### Needed before build
 
@@ -629,9 +687,10 @@ The client was asked to answer these on 2026-10-03 and **skipped the entire bloc
 |---|---|---|
 | 5 | Are 60 seconds and 50 MB acceptable for citizen video? Will this be used on low-end phones with unstable mobile data? **The client answered "kahit ilan second" — "any number of seconds" — which sets no limit at all and is not implementable as written. A cap has to be agreed.** | US-6 |
 | 6 | Who writes and approves the Filipino and English advice text? This is content work with a subject-matter expert, and it gates the November release. **Still unanswered.** | US-8, US-9, US-10 |
-| 7 | Should the Valid ID be visible to Evacuation Center Staff, or Administrators only? *(currently assumed Administrators only)* **The client has answered both ways** — "only Administration" in one place, while also describing staff checking IDs in person during evacuation. Needs one clear ruling. | US-3 |
 | 8 | Should a citizen be able to attach media *after* submitting a report, not only during? The client's "Yes" is ambiguous between "yes, after submitting" and "yes, the citizen reports it". | US-5, US-6 |
 | 9 | Do these new fields need to appear in admin reports and exports? | US-1 |
+
+> **New risk from OQ 2.** Accepting all ID types means the app cannot verify that a document is genuinely an ID. Staff judgement becomes the control. This raises the value of two things the client has not yet asked for: a confirmation step before a decline is final, and a record of *why* staff declined. Both are cheap to build. Neither is currently in scope.
 
 ### Flagged for the client, not blocking
 
@@ -659,9 +718,9 @@ These were analyst decisions, not client instructions. They are implemented and 
 | Story | Title | Type | Priority | Requested by client | Status |
 |---|---|---|---|---|---|
 | US-1 | Register with complete personal details | Change | Must | Yes (item 3) | **Done** (`4a0de779`) |
-| US-2 | Upload a Valid ID during registration | New | Must | Yes (item 4) | Blocked on OQ 1–3 |
-| US-3 | Administrator reviews Valid ID and verifies Pateros residency | Change | Must | Yes (item 4) | Blocked on OQ 1–3, 7 |
-| US-4 | Applicant resubmits a rejected ID | Suggested | Could | No | Not started |
+| US-2 | Upload a Valid ID during registration | New | Must | Yes (item 4) | **Unblocked** — ready to start |
+| US-3 | Staff review the Valid ID and verify Pateros residency | Change | Must | Yes (item 4) | **Unblocked** — ready to start |
+| US-4 | Applicant resubmits a rejected ID | Suggested | Should | No | Not started — raised in priority, see US-4 notes |
 | US-5 | Citizen attaches a photo to an emergency report | Change | Must | Yes (item 1) | Not started (UI is broken today) |
 | US-6 | Citizen attaches a short video to an emergency report | New | Must | Yes (item 1) | Blocked on OQ 5, 8 |
 | US-7 | Responder and Administrator view report attachments | Suggested | Should | No | Not started |
@@ -669,9 +728,11 @@ These were analyst decisions, not client instructions. They are implemented and 
 | US-9 | Citizen views safety advice | New | Must | Yes (item 2) | **Done** (`6a738a84`) |
 | US-10 | Administrator attaches step-by-step photos | New | Must | Yes — offered as a substitute for video | **Done** (`6a738a84`) |
 
-**Total: 10 stories** (8 requested by the client, 2 marked Suggested). **3 delivered**, **3 blocked on client answers**, **4 not started**.
+**Total: 10 stories** (8 requested by the client, 2 marked Suggested). **3 delivered**, **2 unblocked and ready to build**, **1 blocked**, **4 not started**.
 
-US-4 and US-7 are analyst proposals, not client requests. Confirm with the client before they enter the backlog.
+US-4 and US-7 are analyst proposals, not client requests. **US-4's priority is raised from Could to Should** — accepting all ID types (OQ 2) means staff judgement is the only control on whether a document is genuinely an ID, and a mis-scan currently has no recovery path.
+
+US-8, US-9 and US-10 ship **text and photos**. The advice **video** the client originally asked for is not delivered — it is a follow-on requiring its own estimate (see section 3.1).
 
 US-8, US-9 and US-10 ship **text and photos**. The advice **video** the client originally asked for is not delivered — it is a follow-on requiring its own estimate (see section 3.1).
 
@@ -687,22 +748,34 @@ The waves were originally sequenced bottom-up. They were **reordered to run 3 �
 |---|---|---|---|
 | **Wave 3** | US-8, US-9, US-10 — safety advice with step photos | 3rd | **Delivered to staging** |
 | **Wave 2** | US-5, US-6, US-7 — photo/video evidence on reports | 2nd | Not started, blocked on OQ 5 and 8 |
-| **Wave 1** | US-1, US-2, US-3, US-4 — registration details and Valid ID verification | 1st | US-1 done; rest blocked on OQ 1–3 |
+| **Wave 1** | US-1, US-2, US-3, US-4 — registration details and Valid ID verification | 1st | US-1 done; **US-2 and US-3 unblocked as of 2026-10-03 and ready to build** |
 
 **The exact November date is still unknown.** "By November" leaves a 3.5-week swing, which is larger than Wave 3 itself. The date needs confirming before the remaining schedule means anything.
+
+### Wave 1 scope grew after the answers
+
+The 10–13 day estimate for Wave 1 assumed a single reviewer role and an undecided retention policy. Three things changed on 2026-10-03:
+
+- **Center Staff gained review rights** (OQ 7). `updateUserApproval` is currently `adminProcedure`; admitting `staff` means a new authorization tier, per-centre scoping, and its own test coverage.
+- **Retention became a requirement** (OQ 3). Two tiers plus a scheduled purge job, with `purgeAfter` set at write time so cleanup is an indexed scan.
+- **IDs must not be publicly fetchable.** `storagePut` returns a `/manus-storage/{key}` proxy URL (`server/storage.ts:71`). Storing government IDs through that path is not acceptable, so an authenticated, authorization-checked, audit-logging serving route is required.
+
+Wave 1 should be re-estimated once the three sub-decisions in 5.2 are settled. A preliminary figure is **13–17 days**, up from 10–13 — the retention and audit work is new scope, not a refinement of the original estimate.
 
 ### Estimates
 
 | Wave | Scope | Estimate (person-days) |
 |---|---|---|
-| Wave 1 | US-1, US-2, US-3, US-4 | 10–13 |
+| Wave 1 | US-1, US-2, US-3, US-4 | **13–17** *(re-estimated after the 2026-10-03 answers; was 10–13)* |
 | Wave 2 | US-5, US-6, US-7 | 13–17 |
 | Wave 3 | US-8, US-9, US-10 | 7–9 |
-| **Subtotal, feature work** | | **30–39** |
+| **Subtotal, feature work** | | **33–43** |
 | Cross-wave integration, end-to-end QA, handover, deployment | | 5–6 |
-| **Total** | | **35–45** |
+| **Total** | | **38–49** |
 
 This resolves an inconsistency in the original figures: the waves summed to 30–39 while the headline figure was 35–45. The 5–6 day gap is **cross-cutting work** — integrating the three waves against each other, end-to-end QA, and handover — not feature work inside any single wave. It is named here so the two numbers can be reconciled.
+
+Wave 1 was re-estimated upward on 2026-10-03 because the answers added scope rather than removing it — see "Wave 1 scope grew after the answers". The total moved from 35–45 to **38–49 days**.
 
 ### Two things the estimate does not cover
 
