@@ -61,6 +61,17 @@ import {
   getRegisterPath,
 } from "../../../shared/roles";
 import { canTransitionReport, alertsVisibleToRole, type ReportStatus } from "../../../shared/operations";
+import {
+  adviceCategories,
+  adviceCategoryOrder,
+  adviceStatusLabels,
+  nextAdviceStatuses,
+  normalizeAdviceSteps,
+  validateAdviceDraft,
+  type AdviceCategory,
+  type AdviceStatus,
+  type AdviceStepRecord,
+} from "../../../shared/advice";
 import type { RealtimeStreamPayload } from "../../../shared/citizen";
 import { toast } from "sonner";
 import CitizenHome from "./CitizenHome";
@@ -166,6 +177,30 @@ type WorkspaceReport = {
   createdAt?: string | Date;
   resolution?: string | null;
 };
+/** One step-by-step row in the advice editor, before it is normalized and saved. */
+type AdviceStepDraft = AdviceStepRecord & { title: string; instruction: string; instructionFilipino: string; imageUrl: string; imageKey: string };
+
+/** The full editor form. `id` is null while composing a new draft. */
+type AdviceEditorState = {
+  id: number | null;
+  category: AdviceCategory;
+  title: string;
+  titleFilipino: string;
+  summary: string;
+  summaryFilipino: string;
+  body: string;
+  bodyFilipino: string;
+  isEmergency: boolean;
+  steps: AdviceStepDraft[];
+};
+
+/** Narrows a stored category to the taxonomy so an unknown row cannot block a save. */
+function toAdviceCategory(value: string): AdviceCategory {
+  return adviceCategoryOrder.includes(value as AdviceCategory)
+    ? (value as AdviceCategory)
+    : "GENERAL";
+}
+
 type IncidentSummary = {
   id: string;
   type: string;
@@ -557,6 +592,7 @@ export default function Home() {
         { label: "Incident map", icon: MapIcon },
         { label: "Risk reports", icon: AlertTriangle },
         { label: "Alerts", icon: Bell },
+        { label: "Safety advice", icon: LifeBuoy },
         { label: "User & roles", icon: UserCog },
       ]
     : user?.role === "responder"
@@ -1681,6 +1717,118 @@ function WorkspaceView({
   const utils = trpc.useUtils();
   const { data: liveResources } = trpc.operations.resources.useQuery({}, { enabled: active === "Resources" && !isStaticSession() });
   const { data: workspaceAlerts } = trpc.operations.alerts.useQuery(undefined, { enabled: active === "Alerts" && !isStaticSession() });
+  const { data: adviceItems } = trpc.advice.adminList.useQuery(undefined, {
+    enabled: active === "Safety advice" && user?.role === "admin" && !isStaticSession(),
+  });
+  const [adviceEditor, setAdviceEditor] = useState<AdviceEditorState | null>(null);
+  const createAdviceMutation = trpc.advice.create.useMutation({
+    onSuccess: result => {
+      setAdviceEditor(null);
+      toast.success("Draft created. Publish it when the guidance is ready.");
+      if (result?.id) void utils.advice.adminList.invalidate();
+    },
+  });
+  const updateAdviceMutation = trpc.advice.update.useMutation({
+    onSuccess: () => {
+      setAdviceEditor(null);
+      toast.success("Guidance saved.");
+      void utils.advice.adminList.invalidate();
+    },
+  });
+  const adviceStatusMutation = trpc.advice.setStatus.useMutation({
+    onSuccess: result => {
+      toast.success(`Guidance marked ${String(result?.status ?? "").toLowerCase()}.`);
+      void utils.advice.adminList.invalidate();
+    },
+  });
+  const deleteAdviceMutation = trpc.advice.remove.useMutation({
+    onSuccess: () => {
+      toast.success("Guidance deleted.");
+      void utils.advice.adminList.invalidate();
+    },
+  });
+  const uploadAdviceImageMutation = trpc.advice.uploadStepImage.useMutation();
+  const adviceError =
+    createAdviceMutation.error ?? updateAdviceMutation.error ??
+    adviceStatusMutation.error ?? deleteAdviceMutation.error ?? uploadAdviceImageMutation.error;
+  function openNewAdvice() {
+    setAdviceEditor({
+      id: null,
+      category: adviceCategoryOrder[0],
+      title: "",
+      titleFilipino: "",
+      summary: "",
+      summaryFilipino: "",
+      body: "",
+      bodyFilipino: "",
+      isEmergency: false,
+      steps: [{ title: "", instruction: "", instructionFilipino: "", imageUrl: "", imageKey: "" }],
+    });
+  }
+  function openAdviceEdit(item: NonNullable<typeof adviceItems>[number]) {
+    setAdviceEditor({
+      id: item.id,
+      category: toAdviceCategory(item.category),
+      title: item.title,
+      titleFilipino: item.titleFilipino ?? "",
+      summary: item.summary,
+      summaryFilipino: item.summaryFilipino ?? "",
+      body: item.body,
+      bodyFilipino: item.bodyFilipino ?? "",
+      isEmergency: Boolean(item.isEmergency),
+      steps: item.steps.length
+        ? item.steps.map(step => ({
+            title: step.title ?? "",
+            instruction: step.instruction ?? "",
+            instructionFilipino: step.instructionFilipino ?? "",
+            imageUrl: step.imageUrl ?? "",
+            imageKey: step.imageKey ?? "",
+          }))
+        : [{ title: "", instruction: "", instructionFilipino: "", imageUrl: "", imageKey: "" }],
+    });
+  }
+  function updateAdviceStep(index: number, patch: Partial<AdviceStepDraft>) {
+    setAdviceEditor(previous =>
+      previous
+        ? {
+            ...previous,
+            steps: previous.steps.map((step, position) =>
+              position === index ? { ...step, ...patch } : step,
+            ),
+          }
+        : previous,
+    );
+  }
+  async function attachAdvicePhoto(index: number, file: File) {
+    const dataBase64 = await readFileAsDataURL(file);
+    const uploaded = await uploadAdviceImageMutation.mutateAsync({
+      fileName: file.name,
+      mimeType: file.type,
+      dataBase64,
+    });
+    updateAdviceStep(index, { imageUrl: uploaded.url, imageKey: uploaded.key });
+  }
+  function submitAdvice(event: React.FormEvent) {
+    event.preventDefault();
+    if (!adviceEditor) return;
+    const steps = normalizeAdviceSteps(adviceEditor.steps);
+    const payload = {
+      category: adviceEditor.category,
+      title: adviceEditor.title.trim(),
+      titleFilipino: adviceEditor.titleFilipino.trim() || null,
+      summary: adviceEditor.summary.trim(),
+      summaryFilipino: adviceEditor.summaryFilipino.trim() || null,
+      body: adviceEditor.body.trim(),
+      bodyFilipino: adviceEditor.bodyFilipino.trim() || null,
+      isEmergency: adviceEditor.isEmergency,
+      steps,
+    };
+    if (adviceEditor.id === null) {
+      createAdviceMutation.mutate(payload);
+      return;
+    }
+    updateAdviceMutation.mutate({ id: adviceEditor.id, ...payload });
+  }
   const workspaceAlertsForRole = alertsVisibleToRole(workspaceAlerts, user?.role);
   const [staticReports, setStaticReports] = useState<WorkspaceReport[]>(readStaticReports);
   useEffect(() => {
@@ -1783,7 +1931,7 @@ function WorkspaceView({
   >("ALL");
   const [demoSearch, setDemoSearch] = useState("");
   const allowedWorkspaces: Record<string, string[]> = {
-    admin: ["Evacuation centers", "Evacuees", "Resources", "Incident map", "Risk reports", "Alerts", "Activity log", "Settings", "User & roles"],
+    admin: ["Evacuation centers", "Evacuees", "Resources", "Incident map", "Risk reports", "Alerts", "Safety advice", "Activity log", "Settings", "User & roles"],
     staff: ["Overview", "Evacuation centers", "Evacuees", "Resources", "Alerts"],
     responder: ["Overview", "Incident map", "Risk reports", "Alerts", "Security"],
   };
@@ -2020,6 +2168,14 @@ function WorkspaceView({
         ["Team Alpha en route", "RESPONDERS", "HIGH", "IN-APP · SENT"],
       ],
     },
+    "Safety advice": {
+      eyebrow: "PUBLIC GUIDANCE",
+      title: "Safety advice",
+      description:
+        "Step-by-step guidance residents read without signing in. Draft, review, then publish so guidance is only visible to the public once it is complete.",
+      columns: ["Guidance", "Hazard", "Steps", "Status"],
+      rows: [],
+    },
     "Activity log": {
       eyebrow: "AUDIT TRAIL",
       title: "Activity log",
@@ -2101,8 +2257,15 @@ function WorkspaceView({
       ? (filteredLiveReports ?? []).map(report => [report.reportCode, report.reportType, report.location, report.status])
       : active === "Alerts" && workspaceAlerts !== undefined
         ? workspaceAlertsForRole.map(alert => [alert.title, alertAudienceLabels[alert.targetAudience] ?? alert.targetAudience, alert.priority, alert.isActive ? "ACTIVE" : "ENDED"])
+      : active === "Safety advice" && adviceItems !== undefined
+        ? adviceItems.map(item => [
+            item.isEmergency ? `${item.title} (urgent)` : item.title,
+            adviceCategories[item.category as keyof typeof adviceCategories]?.label ?? item.category,
+            String(item.steps.length),
+            adviceStatusLabels[item.status as AdviceStatus] ?? item.status,
+          ])
       : view.rows.filter(row => !normalizedSearch || row.some(cell => cell.toLowerCase().includes(normalizedSearch)));
-  const tableColumns = active === "Evacuation centers" || active === "Resources" ? [...view.columns, "Actions"] : view.columns;
+  const tableColumns = active === "Evacuation centers" || active === "Resources" || active === "Safety advice" ? [...view.columns, "Actions"] : view.columns;
   const reportDestinations = active === "Risk reports" && liveReports !== undefined
     ? (filteredLiveReports ?? []).map(report => report.latitude && report.longitude
       ? `https://www.google.com/maps/dir/?api=1&destination=${report.latitude},${report.longitude}`
@@ -2993,7 +3156,13 @@ function WorkspaceView({
                   <Bell size={15} /> Create alert
                 </Button>
               )
-            : <Button disabled={!canAddRecord} onClick={() => setRecordOpen(true)}>Add record</Button>}
+            : active === "Safety advice"
+              ? user?.role === "admin" && (
+                  <Button onClick={openNewAdvice}>
+                    <LifeBuoy size={15} /> New guidance
+                  </Button>
+                )
+              : <Button disabled={!canAddRecord} onClick={() => setRecordOpen(true)}>Add record</Button>}
         </div>
       </div>
       <div className="workspace-table-wrap">
@@ -3064,6 +3233,29 @@ function WorkspaceView({
                       removeResourceMutation.mutate({ resourceId: resource.id });
                     }} disabled={removeResourceMutation.isPending}><Trash2 size={14} /> Remove</Button>
                   </td>
+                ) : active === "Safety advice" && adviceItems?.[index] ? (
+                  <td className="advice-row-actions">
+                    <Button type="button" variant="outline" onClick={() => openAdviceEdit(adviceItems[index])}>
+                      <Pencil size={14} /> Edit
+                    </Button>
+                    {nextAdviceStatuses(adviceItems[index].status).map(status => (
+                      <Button
+                        key={status}
+                        type="button"
+                        variant="outline"
+                        disabled={adviceStatusMutation.isPending}
+                        onClick={() => adviceStatusMutation.mutate({ id: adviceItems[index].id, status: status as AdviceStatus })}
+                      >
+                        {status === "PUBLISHED" ? "Publish" : status === "ARCHIVED" ? "Archive" : "Unpublish"}
+                      </Button>
+                    ))}
+                    <Button type="button" variant="outline" onClick={() => {
+                      if (!window.confirm(`Delete "${adviceItems[index].title}"? Residents will stop seeing it immediately.`)) return;
+                      deleteAdviceMutation.mutate({ id: adviceItems[index].id });
+                    }} disabled={deleteAdviceMutation.isPending}>
+                      <Trash2 size={14} /> Delete
+                    </Button>
+                  </td>
                 ) : null}
               </tr>
             ))}
@@ -3114,6 +3306,114 @@ function WorkspaceView({
             <label>Audience<select className="role-select" value={alertForm.targetAudience} onChange={event => setAlertForm(previous => ({ ...previous, targetAudience: event.target.value as typeof alertForm.targetAudience }))}><option value="ALL_USERS">All users</option><option value="CITIZENS">Citizens</option><option value="STAFF">Staff</option><option value="RESPONDERS">Responders</option><option value="ADMIN">Admins only</option></select></label>
             {createAlertMutation.error && <p className="login-error" role="alert">{createAlertMutation.error.message}</p>}
             <div className="modal-actions"><Button type="button" variant="outline" onClick={() => setRecordOpen(false)}>Cancel</Button><Button type="submit" disabled={createAlertMutation.isPending || !alertForm.title.trim() || !alertForm.message.trim()}>{createAlertMutation.isPending ? "Broadcasting…" : "Broadcast alert"}</Button></div>
+          </form>
+        </div>
+      )}
+      {adviceEditor && (
+        <div className="modal-backdrop" onClick={() => setAdviceEditor(null)}>
+          <form className="report-modal advice-editor" onClick={event => event.stopPropagation()} onSubmit={submitAdvice}>
+            <div className="modal-title">
+              <div>
+                <span className="eyebrow">PUBLIC GUIDANCE</span>
+                <h2>{adviceEditor.id === null ? "New guidance" : "Edit guidance"}</h2>
+              </div>
+              <button type="button" onClick={() => setAdviceEditor(null)}><X size={18} /></button>
+            </div>
+            <p className="advice-editor-note">
+              English is required and shown to everyone. Filipino is optional and falls back to English when left blank.
+              Guidance stays invisible to the public until you press Publish.
+            </p>
+            <label>Hazard
+              <select className="role-select" value={adviceEditor.category} onChange={event => setAdviceEditor(previous => previous ? { ...previous, category: event.target.value as AdviceCategory } : previous)}>
+                {adviceCategoryOrder.map(category => (
+                  <option key={category} value={category}>{adviceCategories[category].label}</option>
+                ))}
+              </select>
+            </label>
+            <label>Title (English)
+              <Input value={adviceEditor.title} onChange={event => setAdviceEditor(previous => previous ? { ...previous, title: event.target.value } : previous)} placeholder="What to do during an earthquake" required minLength={3} maxLength={180} />
+            </label>
+            <label>Title (Filipino)
+              <Input value={adviceEditor.titleFilipino} onChange={event => setAdviceEditor(previous => previous ? { ...previous, titleFilipino: event.target.value } : previous)} placeholder="Ano ang gagawin sa lindol" maxLength={180} />
+            </label>
+            <label>Summary (English)
+              <Input value={adviceEditor.summary} onChange={event => setAdviceEditor(previous => previous ? { ...previous, summary: event.target.value } : previous)} placeholder="One or two sentences residents see in the list." required minLength={10} maxLength={600} />
+            </label>
+            <label>Summary (Filipino)
+              <Input value={adviceEditor.summaryFilipino} onChange={event => setAdviceEditor(previous => previous ? { ...previous, summaryFilipino: event.target.value } : previous)} maxLength={600} />
+            </label>
+            <label>Full guidance (English)
+              <textarea value={adviceEditor.body} onChange={event => setAdviceEditor(previous => previous ? { ...previous, body: event.target.value } : previous)} placeholder="What happens, what residents should do, and when." required minLength={10} rows={4} />
+            </label>
+            <label>Full guidance (Filipino)
+              <textarea value={adviceEditor.bodyFilipino} onChange={event => setAdviceEditor(previous => previous ? { ...previous, bodyFilipino: event.target.value } : previous)} rows={4} />
+            </label>
+            <label className="advice-emergency-toggle">
+              <input type="checkbox" checked={adviceEditor.isEmergency} onChange={event => setAdviceEditor(previous => previous ? { ...previous, isEmergency: event.target.checked } : previous)} />
+              Pin to the top of the citizen list (use only for urgent guidance)
+            </label>
+            <div className="advice-steps-head">
+              <strong>Step-by-step guidance</strong>
+              <Button type="button" variant="outline" onClick={() => setAdviceEditor(previous => previous ? { ...previous, steps: [...previous.steps, { title: "", instruction: "", instructionFilipino: "", imageUrl: "", imageKey: "" }] } : previous)}>
+                Add step
+              </Button>
+            </div>
+            {adviceEditor.steps.map((step, stepIndex) => (
+              <fieldset className="advice-step" key={stepIndex}>
+                <legend>{`Step ${stepIndex + 1}`}</legend>
+                <label>Short title
+                  <Input value={step.title} onChange={event => updateAdviceStep(stepIndex, { title: event.target.value })} placeholder="Drop, cover and hold on" maxLength={180} />
+                </label>
+                <label>Instruction (English)
+                  <textarea value={step.instruction} onChange={event => updateAdviceStep(stepIndex, { instruction: event.target.value })} placeholder="Get down low and cover your head and neck." rows={2} />
+                </label>
+                <label>Instruction (Filipino)
+                  <textarea value={step.instructionFilipino} onChange={event => updateAdviceStep(stepIndex, { instructionFilipino: event.target.value })} rows={2} />
+                </label>
+                <div className="advice-step-photo">
+                  {step.imageUrl && <img src={step.imageUrl} alt={step.title || "Step photo"} />}
+                  <label className="advice-step-upload">
+                    {uploadAdviceImageMutation.isPending ? "Uploading…" : step.imageUrl ? "Replace photo" : "Add photo"}
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/gif"
+                      disabled={uploadAdviceImageMutation.isPending}
+                      onChange={event => {
+                        const file = event.target.files?.[0];
+                        if (!file) return;
+                        void attachAdvicePhoto(stepIndex, file).catch(() => undefined);
+                      }}
+                    />
+                  </label>
+                  {step.imageUrl && (
+                    <Button type="button" variant="outline" onClick={() => updateAdviceStep(stepIndex, { imageUrl: "", imageKey: "" })}>
+                      Remove
+                    </Button>
+                  )}
+                  <small>JPEG, PNG, WebP or GIF up to 5MB.</small>
+                </div>
+                {adviceEditor.steps.length > 1 && (
+                  <Button type="button" variant="outline" onClick={() => setAdviceEditor(previous => previous ? { ...previous, steps: previous.steps.filter((_, position) => position !== stepIndex) } : previous)}>
+                    <Trash2 size={14} /> Remove step
+                  </Button>
+                )}
+              </fieldset>
+            ))}
+            {adviceEditor.id === null && validateAdviceDraft({
+              title: adviceEditor.title,
+              summary: adviceEditor.summary,
+              body: adviceEditor.body,
+              steps: adviceEditor.steps,
+            }).steps && (
+              <p className="advice-editor-hint">Add at least one step with an instruction or a photo before this can be published.</p>
+            )}
+            {adviceError && <p className="login-error" role="alert">{adviceError.message}</p>}
+            <div className="modal-actions">
+              <Button type="button" variant="outline" onClick={() => setAdviceEditor(null)}>Cancel</Button>
+              <Button type="submit" disabled={createAdviceMutation.isPending || updateAdviceMutation.isPending}>
+                {createAdviceMutation.isPending || updateAdviceMutation.isPending ? "Saving…" : adviceEditor.id === null ? "Save draft" : "Save changes"}
+              </Button>
+            </div>
           </form>
         </div>
       )}

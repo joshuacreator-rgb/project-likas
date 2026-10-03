@@ -1,11 +1,12 @@
-import { eq, sql, and, desc, inArray, isNull, gt, or } from "drizzle-orm";
+import { eq, sql, and, asc, desc, inArray, isNull, gt, or } from "drizzle-orm";
 import { compare, hash } from "bcryptjs";
 import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import { generateResetToken, hashResetToken, verifyResetToken } from "./resetTokens";
 import { createTotpUri, generateTotpSecret, verifyTotpCode } from "./totp";
 import { drizzle } from "drizzle-orm/mysql2";
-import { activityLogs, alerts, authCredentials, centerStaff, evidenceFiles, evacuationCenters, invitations, evacuees, InsertUser, resources, resourceTransactions, responderActions, reportExports, riskReports, roleChangeRequests, systemSettings, users, weatherSnapshots } from "../drizzle/schema";
+import { activityLogs, adviceSteps, alerts, authCredentials, centerStaff, evidenceFiles, evacuationCenters, invitations, evacuees, InsertUser, resources, resourceTransactions, responderActions, reportExports, riskReports, roleChangeRequests, safetyAdvice, systemSettings, users, weatherSnapshots } from "../drizzle/schema";
 import { getResourceStatus, resolveNotificationDelivery } from "../shared/operations";
+import { adviceImageMaxBytes, isAllowedAdviceImageMimeType, normalizeAdviceSteps, uniqueAdviceSlug, type AdviceStatus } from "../shared/advice";
 import { ENV } from "./_core/env";
 import { storagePut } from "./storage";
 import { broadcastAlert } from "./_core/realtime";
@@ -110,3 +111,230 @@ export async function verifyLocalCredentials(email: string, password: string) { 
 export async function issuePasswordReset(email: string) { const db = await getDb(); if (!db) throw new Error("Database unavailable"); const normalizedEmail = email.trim().toLowerCase(); const token = generateResetToken(); const existing = await db.select().from(authCredentials).where(eq(authCredentials.email, normalizedEmail)).limit(1); if (!existing[0]) throw new Error("No account found with this email address."); await db.update(authCredentials).set({ resetTokenHash: hashResetToken(token), resetExpiresAt: new Date(Date.now() + 30 * 60 * 1000) }).where(eq(authCredentials.email, normalizedEmail)); return token; }
 export async function resetLocalPassword(email: string, token: string, newPassword: string) { const db = await getDb(); if (!db) throw new Error("Database unavailable"); const normalizedEmail = email.trim().toLowerCase(); const rows = await db.select().from(authCredentials).where(eq(authCredentials.email, normalizedEmail)).limit(1); const credential = rows[0]; if (!credential) throw new Error("No recovery request found for this email. Request a token first."); if (!credential.resetTokenHash || !credential.resetExpiresAt || credential.resetExpiresAt.getTime() < Date.now()) throw new Error("Reset token has expired. Please request a new recovery token."); if (!credential.resetTokenHash || !verifyResetToken(token, credential.resetTokenHash)) throw new Error("Reset token is invalid. Please check the token and try again."); await db.update(authCredentials).set({ passwordHash: await hash(newPassword, 12), resetTokenHash: null, resetExpiresAt: null }).where(eq(authCredentials.id, credential.id)); return { success: true }; }
 export async function changeLocalPassword(userId: number, currentPassword: string, newPassword: string) { const db = await getDb(); if (!db) throw new Error("Database unavailable"); const rows = await db.select().from(authCredentials).where(eq(authCredentials.userId, userId)).limit(1); const credential = rows[0]; if (!credential || !(await compare(currentPassword, credential.passwordHash))) throw new Error("Current password is incorrect"); await db.update(authCredentials).set({ passwordHash: await hash(newPassword, 12) }).where(eq(authCredentials.userId, userId)); return { success: true }; }
+
+// ---------------------------------------------------------------------------
+// Safety advice (US-8 / US-9 / US-10)
+// ---------------------------------------------------------------------------
+
+export type AdviceStepInput = {
+  title?: string | null;
+  titleFilipino?: string | null;
+  instruction?: string | null;
+  instructionFilipino?: string | null;
+  imageUrl?: string | null;
+  imageKey?: string | null;
+};
+
+export type AdviceContentInput = {
+  category: string;
+  title: string;
+  titleFilipino?: string | null;
+  summary: string;
+  summaryFilipino?: string | null;
+  body: string;
+  bodyFilipino?: string | null;
+  isEmergency?: boolean | null;
+  sortOrder?: number | null;
+};
+
+/** Slugs already in use, so a new item can be given a unique url. */
+async function takeAdviceSlugs(): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ slug: safetyAdvice.slug }).from(safetyAdvice);
+  return rows.map(row => row.slug);
+}
+
+/**
+ * Ordering mirrors sortAdviceForDisplay: urgent guidance first, then curated
+ * order ascending, then most recently touched.
+ */
+
+export async function listSafetyAdvice(options: { includeUnpublished?: boolean } = {}) {
+  const db = await getDb();
+  if (!db) return [];
+  if (options.includeUnpublished)
+    return db.select().from(safetyAdvice).orderBy(desc(safetyAdvice.isEmergency), asc(safetyAdvice.sortOrder), desc(safetyAdvice.updatedAt));
+  return db
+    .select()
+    .from(safetyAdvice)
+    .where(eq(safetyAdvice.status, "PUBLISHED"))
+    .orderBy(desc(safetyAdvice.isEmergency), asc(safetyAdvice.sortOrder), desc(safetyAdvice.publishedAt));
+}
+
+export async function getSafetyAdviceById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(safetyAdvice).where(eq(safetyAdvice.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function getSafetyAdviceBySlug(slug: string, options: { includeUnpublished?: boolean } = {}) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(safetyAdvice)
+    .where(
+      options.includeUnpublished
+        ? eq(safetyAdvice.slug, slug)
+        : and(eq(safetyAdvice.slug, slug), eq(safetyAdvice.status, "PUBLISHED")),
+    )
+    .limit(1);
+  return rows[0];
+}
+
+export async function listAdviceSteps(adviceId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(adviceSteps).where(eq(adviceSteps.adviceId, adviceId)).orderBy(adviceSteps.stepNo);
+}
+
+/** Published guidance with its steps, ready for the public citizen view. */
+export async function listPublishedAdviceWithSteps() {
+  const advice = await listSafetyAdvice();
+  return Promise.all(
+    advice.map(async item => ({ ...item, steps: await listAdviceSteps(item.id) })),
+  );
+}
+
+type AdviceDb = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+type AdviceTx = Parameters<Parameters<AdviceDb["transaction"]>[0]>[0];
+
+/** Steps are replaced wholesale so reordering in the editor cannot duplicate rows. */
+async function replaceAdviceSteps(
+  tx: AdviceTx,
+  adviceId: number,
+  steps: readonly AdviceStepInput[] | null | undefined,
+) {
+  await tx.delete(adviceSteps).where(eq(adviceSteps.adviceId, adviceId));
+  const normalized = normalizeAdviceSteps(steps);
+  if (normalized.length === 0) return;
+  await tx.insert(adviceSteps).values(
+    normalized.map(step => ({
+      adviceId,
+      stepNo: step.stepNo!,
+      title: step.title?.trim() || null,
+      titleFilipino: step.titleFilipino?.trim() || null,
+      instruction: step.instruction?.trim() || null,
+      instructionFilipino: step.instructionFilipino?.trim() || null,
+      imageUrl: step.imageUrl || null,
+      imageKey: step.imageKey || null,
+    })),
+  );
+}
+
+export async function createSafetyAdvice(
+  input: AdviceContentInput,
+  steps: readonly AdviceStepInput[] | null | undefined,
+  userId: number,
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const slug = uniqueAdviceSlug(input.title, await takeAdviceSlugs());
+  return db.transaction(async tx => {
+    const [created] = await tx
+      .insert(safetyAdvice)
+      .values({
+        slug,
+        category: input.category,
+        title: input.title.trim(),
+        titleFilipino: input.titleFilipino?.trim() || null,
+        summary: input.summary.trim(),
+        summaryFilipino: input.summaryFilipino?.trim() || null,
+        body: input.body.trim(),
+        bodyFilipino: input.bodyFilipino?.trim() || null,
+        isEmergency: input.isEmergency ?? false,
+        sortOrder: input.sortOrder ?? 0,
+        status: "DRAFT",
+        createdBy: userId,
+      })
+      .$returningId();
+    await replaceAdviceSteps(tx, created.id, steps);
+    return created;
+  });
+}
+
+export async function updateSafetyAdvice(
+  id: number,
+  input: AdviceContentInput,
+  steps: readonly AdviceStepInput[] | null | undefined,
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const existing = await getSafetyAdviceById(id);
+  if (!existing) throw new Error("Safety advice not found");
+  const nextSlug =
+    input.title.trim() === existing.title
+      ? existing.slug
+      : uniqueAdviceSlug(input.title, (await takeAdviceSlugs()).filter(slug => slug !== existing.slug));
+  await db.transaction(async tx => {
+    await tx
+      .update(safetyAdvice)
+      .set({
+        slug: nextSlug,
+        category: input.category,
+        title: input.title.trim(),
+        titleFilipino: input.titleFilipino?.trim() || null,
+        summary: input.summary.trim(),
+        summaryFilipino: input.summaryFilipino?.trim() || null,
+        body: input.body.trim(),
+        bodyFilipino: input.bodyFilipino?.trim() || null,
+        isEmergency: input.isEmergency ?? false,
+        sortOrder: input.sortOrder ?? 0,
+      })
+      .where(eq(safetyAdvice.id, id));
+    await replaceAdviceSteps(tx, id, steps);
+  });
+  return getSafetyAdviceById(id);
+}
+
+/**
+ * Move an item through draft -> published -> archived. Publishing stamps
+ * publishedAt so the public list can order by recency; archiving clears it.
+ */
+export async function setSafetyAdviceStatus(id: number, status: AdviceStatus) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const existing = await getSafetyAdviceById(id);
+  if (!existing) throw new Error("Safety advice not found");
+  const patch: Partial<typeof safetyAdvice.$inferInsert> = { status };
+  if (status === "PUBLISHED") {
+    patch.publishedAt = existing.publishedAt ?? new Date();
+    patch.archivedAt = null;
+  }
+  if (status === "ARCHIVED") {
+    patch.archivedAt = new Date();
+  }
+  if (status === "DRAFT") {
+    patch.archivedAt = null;
+  }
+  await db.update(safetyAdvice).set(patch).where(eq(safetyAdvice.id, id));
+  return getSafetyAdviceById(id);
+}
+
+export async function deleteSafetyAdvice(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  // Steps are removed by the FK cascade; clear them explicitly so environments
+  // created before the cascade existed cannot leave orphans behind.
+  await db.delete(adviceSteps).where(eq(adviceSteps.adviceId, id));
+  await db.delete(safetyAdvice).where(eq(safetyAdvice.id, id));
+  return { id };
+}
+
+/** Store one step-by-step photo. Images only, so the gallery stays light. */
+export async function uploadAdviceStepImage(input: {
+  fileName: string;
+  mimeType: string;
+  dataBase64: string;
+}) {
+  if (!isAllowedAdviceImageMimeType(input.mimeType))
+    throw new Error("Step photos must be a JPEG, PNG, WebP or GIF image");
+  const cleanName = input.fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const bytes = Buffer.from(input.dataBase64.replace(/^data:[^;]+;base64,/, ""), "base64");
+  if (bytes.byteLength > adviceImageMaxBytes)
+    throw new Error("Step photo exceeds the 5MB limit");
+  const stored = await storagePut(`safety-advice/${cleanName}`, bytes, input.mimeType);
+  return { url: stored.url, key: stored.key, sizeBytes: bytes.byteLength };
+}

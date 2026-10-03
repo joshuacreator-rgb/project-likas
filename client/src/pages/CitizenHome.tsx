@@ -45,6 +45,22 @@ import {
   type CitizenLanguage,
   type RealtimeStreamPayload,
 } from "../../../shared/citizen";
+import {
+  adviceBodyText,
+  adviceCategoriesInUse,
+  adviceCategoryLabel,
+  adviceHeadline,
+  adviceStepText,
+  adviceSummaryText,
+  buildAdviceSpeech,
+  normalizeAdviceSteps,
+  sortAdviceForDisplay,
+  type AdviceRecord,
+  type AdviceStepRecord,
+} from "../../../shared/advice";
+
+/** Published guidance plus its steps, as cached and as returned by the API. */
+type CitizenAdviceRow = AdviceRecord & { steps: AdviceStepRecord[] };
 
 type CitizenCenterRow = {
   name: string;
@@ -204,6 +220,20 @@ function readStaticCenterRecords(): CitizenCenterRow[] {
   }
 }
 
+/**
+ * Guidance stays readable when the network drops, which is exactly when it
+ * matters. Mirrors the `likas-cached-centers` pattern.
+ */
+function readCachedAdvice(): CitizenAdviceRow[] {
+  try {
+    const raw = window.localStorage.getItem("likas-cached-advice");
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter(item => item?.id && item?.title) : [];
+  } catch {
+    return [];
+  }
+}
+
 function speakText(text: string, lang = "en-PH") {
   if (typeof window === "undefined" || !("speechSynthesis" in window))
     return false;
@@ -227,6 +257,11 @@ export default function CitizenHome() {
   const { data: alerts } = trpc.operations.alerts.useQuery(undefined, {
     enabled: Boolean(user),
   });
+  // Safety guidance is intentionally ungated: no session is required to read it.
+  const { data: publishedAdvice } = trpc.advice.list.useQuery();
+  const [adviceFilter, setAdviceFilter] = useState("ALL");
+  const [openAdviceId, setOpenAdviceId] = useState<number | null>(null);
+  const [cachedAdvice, setCachedAdvice] = useState<CitizenAdviceRow[]>(readCachedAdvice);
   const { data: smsConfig } = trpc.operations.emergencySms.useQuery();
   const createReportMutation = trpc.operations.createRiskReport.useMutation();
   const [reportOpen, setReportOpen] = useState(false);
@@ -312,6 +347,22 @@ export default function CitizenHome() {
     );
   }, [centerSearch, displayCenters]);
   const usingCachedCenters = !centers?.length && cachedCenters.length > 0;
+  const adviceRows = useMemo<CitizenAdviceRow[]>(
+    () =>
+      sortAdviceForDisplay(
+        ((publishedAdvice?.length ? publishedAdvice : cachedAdvice) ?? []) as CitizenAdviceRow[],
+      ),
+    [publishedAdvice, cachedAdvice],
+  );
+  const usingCachedAdvice = !publishedAdvice?.length && cachedAdvice.length > 0;
+  const adviceFilters = useMemo(() => adviceCategoriesInUse(adviceRows), [adviceRows]);
+  const visibleAdvice = useMemo(
+    () =>
+      adviceFilter === "ALL"
+        ? adviceRows
+        : adviceRows.filter(row => row.category === adviceFilter),
+    [adviceFilter, adviceRows],
+  );
   const displayAlerts = useMemo(() => {
     const rows = alerts?.length
       ? alerts.slice(0, 3)
@@ -350,6 +401,15 @@ export default function CitizenHome() {
       setCachedCenters(centers);
     }
   }, [centers]);
+  useEffect(() => {
+    if (publishedAdvice?.length) {
+      window.localStorage.setItem(
+        "likas-cached-advice",
+        JSON.stringify(publishedAdvice),
+      );
+      setCachedAdvice(publishedAdvice as CitizenAdviceRow[]);
+    }
+  }, [publishedAdvice]);
   useEffect(() => {
     const isStaticSession = Boolean(
       getStaticSession() || sessionStorage.getItem("likas-static-demo-role")
@@ -936,6 +996,134 @@ export default function CitizenHome() {
               <Bell size={18} />
             </article>
           ))}
+        </section>
+        <section className="citizen-advice" id="safety-advice">
+          <div className="citizen-section-head">
+            <div>
+              <span className="eyebrow">{t.adviceEyebrow}</span>
+              <h2>{t.safetyAdvice}</h2>
+              <p>{t.safetyAdviceHelp}</p>
+            </div>
+            <button
+              onClick={() =>
+                speakText(
+                  visibleAdvice
+                    .map(row => buildAdviceSpeech(row, row.steps, language))
+                    .join(" "),
+                  speechLanguage,
+                )
+              }
+              aria-label={t.readAdvice}
+            >
+              <Volume2 size={20} />
+            </button>
+          </div>
+          {usingCachedAdvice && (
+            <p className="citizen-advice-offline" role="status">
+              {t.adviceOffline}
+            </p>
+          )}
+          {adviceFilters.length > 1 && (
+            <div className="citizen-advice-filters" role="group" aria-label={t.safetyAdvice}>
+              <button
+                className={adviceFilter === "ALL" ? "selected" : ""}
+                aria-pressed={adviceFilter === "ALL"}
+                onClick={() => setAdviceFilter("ALL")}
+              >
+                {t.allHazards}
+              </button>
+              {adviceFilters.map(category => (
+                <button
+                  key={category}
+                  className={adviceFilter === category ? "selected" : ""}
+                  aria-pressed={adviceFilter === category}
+                  onClick={() => setAdviceFilter(category)}
+                >
+                  {adviceCategoryLabel(category, language)}
+                </button>
+              ))}
+            </div>
+          )}
+          {visibleAdvice.length === 0 ? (
+            <p className="citizen-advice-empty">{t.noAdviceYet}</p>
+          ) : (
+            visibleAdvice.map(row => {
+              const steps = normalizeAdviceSteps(row.steps);
+              const open = openAdviceId === row.id;
+              return (
+                <article
+                  className={`citizen-advice-card ${row.isEmergency ? "emergency" : ""}`}
+                  key={row.id}
+                >
+                  <div className="citizen-advice-card-head">
+                    <span className="citizen-advice-category">
+                      {adviceCategoryLabel(row.category, language)}
+                    </span>
+                    <button
+                      type="button"
+                      className="citizen-advice-listen"
+                      onClick={() =>
+                        speakText(
+                          buildAdviceSpeech(row, steps, language),
+                          speechLanguage,
+                        )
+                      }
+                      aria-label={t.readAdvice}
+                    >
+                      <Volume2 size={18} />
+                    </button>
+                  </div>
+                  <h3>{adviceHeadline(row, language)}</h3>
+                  <p>{adviceSummaryText(row, language)}</p>
+                  {open && (
+                    <div className="citizen-advice-detail">
+                      <p className="citizen-advice-body">{adviceBodyText(row, language)}</p>
+                      {steps.length > 0 && (
+                        <ol className="citizen-advice-steps">
+                          {steps.map((step, index) => {
+                            const text = adviceStepText(step, language);
+                            return (
+                              <li key={step.id ?? `step-${index + 1}`}>
+                                {step.imageUrl && (
+                                  <img
+                                    src={step.imageUrl}
+                                    alt={text.title || adviceHeadline(row, language)}
+                                    loading="lazy"
+                                  />
+                                )}
+                                <div>
+                                  <strong>
+                                    {t.stepWord} {index + 1}
+                                    {text.title ? `: ${text.title}` : ""}
+                                  </strong>
+                                  {text.instruction && <p>{text.instruction}</p>}
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ol>
+                      )}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="citizen-advice-toggle"
+                    aria-expanded={open}
+                    onClick={() => setOpenAdviceId(open ? null : row.id)}
+                  >
+                    {steps.length > 0
+                      ? open
+                        ? t.hideSteps
+                        : `${t.showSteps} (${steps.length})`
+                      : open
+                        ? t.hideSteps
+                        : t.showSteps}
+                    <ChevronRight size={18} />
+                  </button>
+                </article>
+              );
+            })
+          )}
         </section>
       </main>
       {reportOpen && (

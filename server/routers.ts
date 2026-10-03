@@ -32,6 +32,8 @@ import {
   createResource,
   createRiskReport,
   createRoleChangeRequest,
+  createSafetyAdvice,
+  deleteSafetyAdvice,
   disableTwoFactor,
   getOperationsSummary,
   getPublicSmsSettings,
@@ -40,12 +42,15 @@ import {
   getResourceById,
   getRiskReportById,
   getRoleChangeRequest,
+  getSafetyAdviceById,
+  getSafetyAdviceBySlug,
   getSettings,
   getTwoFactorStatus,
   getUserById,
   getWeatherSnapshot,
   issuePasswordReset,
   listActivityLogs,
+  listAdviceSteps,
   listAlerts,
   listAssignedCenterIds,
   listCenters,
@@ -54,6 +59,7 @@ import {
   listEvacuees,
   listEvacueesForCenters,
   listInvitations,
+  listPublishedAdviceWithSteps,
   listResources,
   listResourcesForCenters,
   listResourceTransactions,
@@ -61,6 +67,7 @@ import {
   listRiskReports,
   listRiskReportsForUser,
   listResponders,
+  listSafetyAdvice,
   listUsers,
   listRoleChangeRequests,
   logActivity,
@@ -75,12 +82,15 @@ import {
   resetLocalPassword,
   revokeDemoAccount,
   setRoleChangeRequestStatus,
+  setSafetyAdviceStatus,
   transactResource,
   transferEvacuee,
   updateResource,
   updateRiskReport,
+  updateSafetyAdvice,
   updateSetting,
   updateUserRole,
+  uploadAdviceStepImage,
   uploadEvidence,
   upsertCenter,
   verifyLocalCredentials,
@@ -89,6 +99,12 @@ import {
 } from "./db";
 import { broadcastAlert, broadcastAssignment, broadcastIncident } from "./_core/realtime";
 import { toCitizenEmergencyNotification } from "../shared/citizen";
+import {
+  adviceCategoryOrder,
+  canTransitionAdviceStatus,
+  isAdviceDraftPublishable,
+  validateAdviceDraft,
+} from "../shared/advice";
 
 const allowedRoles = [
   "admin",
@@ -106,6 +122,33 @@ const roleProcedure = (roles: readonly string[]) =>
       });
     return next();
   });
+type AdviceCategoryValue = (typeof adviceCategoryOrder)[number];
+const adviceCategoryValues = [
+  ...adviceCategoryOrder,
+] as [AdviceCategoryValue, ...AdviceCategoryValue[]];
+
+/** Shared content fields for create and update so both stay in lockstep. */
+const adviceContentShape = {
+  category: z.enum(adviceCategoryValues),
+  title: z.string().min(3).max(180),
+  titleFilipino: z.string().max(180).nullish(),
+  summary: z.string().min(10).max(600),
+  summaryFilipino: z.string().max(600).nullish(),
+  body: z.string().min(10).max(20000),
+  bodyFilipino: z.string().max(20000).nullish(),
+  isEmergency: z.boolean().default(false),
+  sortOrder: z.number().int().min(0).max(999).nullish(),
+};
+
+/** One step-by-step photo instruction. Text and photo are both optional. */
+const adviceStepShape = z.object({
+  title: z.string().max(180).nullish(),
+  titleFilipino: z.string().max(180).nullish(),
+  instruction: z.string().max(2000).nullish(),
+  instructionFilipino: z.string().max(2000).nullish(),
+  imageUrl: z.string().max(1000).nullish(),
+  imageKey: z.string().max(500).nullish(),
+});
 const reportInput = z.object({
   reportCode: z.string().min(4).max(32),
   reportType: z.string().min(2).max(80),
@@ -778,6 +821,101 @@ export const appRouter = router({
         if (!canAccess) throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this report." });
         return uploadEvidence({ ...input, userId: ctx.user.id });
       }),
+  }),
+  advice: router({
+    /**
+     * Public safety guidance. Deliberately ungated: residents sheltering in
+     * Pateros, and visitors evacuating through it, must be able to read
+     * evacuation instructions without an approved account. Only PUBLISHED
+     * rows are ever returned.
+     */
+    list: publicProcedure.query(() => listPublishedAdviceWithSteps()),
+    detail: publicProcedure
+      .input(z.object({ slug: z.string().min(1).max(120) }))
+      .query(async ({ input }) => {
+        const advice = await getSafetyAdviceBySlug(input.slug);
+        if (!advice) throw new TRPCError({ code: "NOT_FOUND", message: "Safety advice not found" });
+        return { ...advice, steps: await listAdviceSteps(advice.id) };
+      }),
+
+    adminList: adminProcedure.query(async () => {
+      const advice = await listSafetyAdvice({ includeUnpublished: true });
+      return Promise.all(advice.map(async item => ({ ...item, steps: await listAdviceSteps(item.id) })));
+    }),
+    create: adminProcedure
+      .input(z.object({ ...adviceContentShape, steps: z.array(adviceStepShape).max(30).default([]) }))
+      .mutation(async ({ ctx, input }) => {
+        const created = await createSafetyAdvice(input, input.steps, ctx.user.id);
+        await logActivity({
+          actorId: ctx.user.id,
+          action: "CREATE",
+          entityType: "safety_advice",
+          entityId: created.id,
+        });
+        return getSafetyAdviceById(created.id);
+      }),
+    update: adminProcedure
+      .input(z.object({ id: z.number().int().positive(), ...adviceContentShape, steps: z.array(adviceStepShape).max(30).default([]) }))
+      .mutation(async ({ ctx, input }) => {
+        const updated = await updateSafetyAdvice(input.id, input, input.steps);
+        await logActivity({
+          actorId: ctx.user.id,
+          action: "UPDATE",
+          entityType: "safety_advice",
+          entityId: input.id,
+        });
+        return updated;
+      }),
+    setStatus: adminProcedure
+      .input(z.object({ id: z.number().int().positive(), status: z.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]) }))
+      .mutation(async ({ ctx, input }) => {
+        const existing = await getSafetyAdviceById(input.id);
+        if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Safety advice not found" });
+        if (!canTransitionAdviceStatus(existing.status, input.status))
+          throw new TRPCError({ code: "BAD_REQUEST", message: `Cannot move guidance from ${existing.status} to ${input.status}` });
+        if (input.status === "PUBLISHED") {
+          const steps = await listAdviceSteps(input.id);
+          if (!isAdviceDraftPublishable({ ...existing, steps })) {
+            const errors = validateAdviceDraft({ ...existing, steps });
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `This guidance is not ready to publish: ${Object.values(errors).filter(Boolean).join(" ")}`,
+            });
+          }
+        }
+        const updated = await setSafetyAdviceStatus(input.id, input.status);
+        await logActivity({
+          actorId: ctx.user.id,
+          action: input.status,
+          entityType: "safety_advice",
+          entityId: input.id,
+        });
+        return updated;
+      }),
+    remove: adminProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const existing = await getSafetyAdviceById(input.id);
+        if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Safety advice not found" });
+        await deleteSafetyAdvice(input.id);
+        await logActivity({
+          actorId: ctx.user.id,
+          action: "DELETE",
+          entityType: "safety_advice",
+          entityId: input.id,
+          metadata: existing.title,
+        });
+        return { id: input.id };
+      }),
+    uploadStepImage: adminProcedure
+      .input(
+        z.object({
+          fileName: z.string().min(1).max(255),
+          mimeType: z.string().min(3).max(120),
+          dataBase64: z.string().min(1),
+        }),
+      )
+      .mutation(({ input }) => uploadAdviceStepImage(input)),
   }),
   security: router({
     twoFactorStatus: roleProcedure(["responder"]).query(({ ctx }) =>
