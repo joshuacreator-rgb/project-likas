@@ -305,11 +305,26 @@ async function attachCitizenIdDocument(input: {
   const cleanName = input.upload.fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
   // Namespaced by user id so one resident's documents are never mixed with
   // another's in the bucket, and so a single resident's set is easy to find.
-  const stored = await storagePut(
-    `citizen-ids/${input.userId}/${cleanName}`,
-    bytes,
-    input.upload.mimeType,
-  );
+  //
+  // A storage backend failure is re-thrown as a TRPCError with a message safe to
+  // show a resident. The underlying error names configuration variables and
+  // hosts, which is exactly the sort of detail that does not belong in a
+  // browser or in a resident's hands.
+  let stored: Awaited<ReturnType<typeof storagePut>>;
+  try {
+    stored = await storagePut(
+      `citizen-ids/${input.userId}/${cleanName}`,
+      bytes,
+      input.upload.mimeType,
+    );
+  } catch (error) {
+    console.error("[ID upload] storage write failed", error);
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message:
+        "We could not save your ID right now. Your account was created — please try uploading it again.",
+    });
+  }
 
   try {
     return await createCitizenIdDocument({
@@ -341,8 +356,8 @@ export const appRouter = router({
    *
    * `imageUrl` is the only way an ID file leaves the server. It mints a
    * short-lived signed URL after an authorization check and writes an audit
-   * entry, because `storagePut`'s own `/manus-storage/{key}` path is a public
-   * proxy and must never be used for a government ID.
+   * entry, because `storagePut`'s own path is unsigned and must never be used
+   * for a government ID.
    */
   idVerification: router({
     /**
@@ -676,25 +691,51 @@ export const appRouter = router({
           role: input.role,
         });
 
-        // The ID is attached here rather than after sign-in because a citizen
-        // cannot sign in until an administrator approves them, and residency
-        // review is what approval means. Validated and stored before the user
-        // row is created, so a malformed upload fails registration outright
-        // instead of leaving an account that can never be approved.
+        // The ID is attached after the account is created, not before.
+        //
+        // It used to be validated and stored first, so that a bad upload failed
+        // registration outright rather than leaving an account that can never be
+        // approved. That was sound in principle but wrong in practice: a storage
+        // outage destroyed everything the resident had just typed, which is a far
+        // worse outcome than an account awaiting an ID.
+        //
+        // A failed upload is now survivable because `uploadPendingId` below lets
+        // the resident retry using the approval token, no sign-in required. A
+        // pending citizen cannot sign in, so that route is the only way back and
+        // it has to exist for this to be safe.
         let idDocumentId: number | null = null;
+        let idUploadFailed = false;
         if (input.validId) {
-          idDocumentId = await attachCitizenIdDocument({
-            userId: user.userId,
-            centerId: null,
-            upload: input.validId,
-          });
-          await logActivity({
-            actorId: null,
-            action: "ID_DOCUMENT_UPLOADED",
-            entityType: "citizen_id_document",
-            entityId: idDocumentId,
-            metadata: JSON.stringify({ userId: user.userId, via: "registration" }),
-          });
+          try {
+            idDocumentId = await attachCitizenIdDocument({
+              userId: user.userId,
+              centerId: null,
+              upload: input.validId,
+            });
+            await logActivity({
+              actorId: null,
+              action: "ID_DOCUMENT_UPLOADED",
+              entityType: "citizen_id_document",
+              entityId: idDocumentId,
+              metadata: JSON.stringify({ userId: user.userId, via: "registration" }),
+            });
+          } catch (error) {
+            idUploadFailed = true;
+            // Logged with the real reason for our own diagnosis; the resident
+            // gets a plain message. Error text can carry storage credentials'
+            // hostnames and configuration names, which have no business in a
+            // browser.
+            console.error("[registration] ID upload failed for", user.userId, error);
+            await logActivity({
+              actorId: null,
+              action: "ID_DOCUMENT_UPLOAD_FAILED",
+              entityType: "user",
+              entityId: user.userId,
+              metadata: JSON.stringify({ via: "registration" }),
+            }).catch(() => {
+              /* never fail registration over an audit write */
+            });
+          }
         }
         const approvalToken = await new SignJWT({ type: "citizen-approval" })
           .setProtectedHeader({ alg: "HS256" })
@@ -702,7 +743,89 @@ export const appRouter = router({
           .setIssuedAt()
           .setExpirationTime("1d")
           .sign(sessionKey());
-        return { approvalRequired: true as const, email: user.email, approvalToken, idDocumentId };
+        return {
+          approvalRequired: true as const,
+          email: user.email,
+          approvalToken,
+          idDocumentId,
+          idUploadFailed,
+        };
+      }),
+
+    /**
+     * Retries the ID upload for a citizen whose account exists but whose ID
+     * never made it into storage.
+     *
+     * Authorized by the registration approval token rather than a session,
+     * because a PENDING citizen cannot sign in: `login` refuses pending
+     * accounts and `completeApproval` only issues a session once the account is
+     * already approved. Without this route, an account created during a storage
+     * outage would be permanently stuck.
+     *
+     * The token is scoped to one user id and expires in a day, and the upload is
+     * bound to that same user id, so a token cannot be used to attach a document
+     * to somebody else's application.
+     */
+    uploadPendingId: publicProcedure
+      .input(
+        z.object({
+          token: z.string().min(20),
+          validId: uploadedIdShape,
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        // Before the work, not after: the point is to cap how much upload work an
+        // attacker can queue with one token. Keyed on the token so two residents
+        // registering together cannot exhaust each other's budget.
+        enforceRateLimit(ctx.req, `pending-id:${input.token.slice(-16)}`, 10, 60 * 60 * 1000);
+
+        let userId = 0;
+        try {
+          const { payload } = await jwtVerify(input.token, sessionKey());
+          if (payload.type !== "citizen-approval" || typeof payload.sub !== "string") {
+            throw new Error("Invalid approval token");
+          }
+          userId = Number(payload.sub);
+        } catch {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "This registration session has expired. Please register again.",
+          });
+        }
+
+        const user = await getUserById(userId);
+        if (!user || user.role !== "citizen")
+          throw new TRPCError({ code: "NOT_FOUND", message: "Registration not found." });
+        if (user.accountStatus === "APPROVED")
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Your account is already approved. Upload your ID from your account page.",
+          });
+
+        const existing = await getPendingIdDocumentForUser(userId);
+        if (existing)
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "You already have an ID awaiting review.",
+          });
+
+        const latest = await getLatestIdDocumentForUser(userId);
+        const documentId = await attachCitizenIdDocument({
+          userId,
+          centerId: null,
+          supersedesId: latest && latest.status === "REJECTED" ? latest.id : null,
+          upload: input.validId,
+        });
+
+        await logActivity({
+          actorId: userId,
+          action: "ID_DOCUMENT_UPLOADED",
+          entityType: "citizen_id_document",
+          entityId: documentId,
+          metadata: JSON.stringify({ via: "approval-token-retry" }),
+        });
+
+        return { id: documentId };
       }),
     checkApproval: publicProcedure
       .input(z.object({ token: z.string().min(20) }))

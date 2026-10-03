@@ -345,11 +345,10 @@ export async function uploadAdviceStepImage(input: {
 //
 // Worth knowing before changing anything in this section:
 //
-//  - Nothing here returns a publicly fetchable URL. `storagePut` yields a
-//    `/manus-storage/{key}` proxy path, which is acceptable for advice step
-//    photos but not for a government ID belonging to a named resident. Callers
-//    get a `fileKey` and the router serves it through an authenticated, audited
-//    route instead.
+//  - Nothing here returns a publicly fetchable URL. `storagePut` yields an
+//    unsigned path, which is acceptable for advice step photos but not for a
+//    government ID belonging to a named resident. Callers get a `fileKey` and
+//    the router serves it through an authenticated, audited route instead.
 //  - `purgeAfter` is written at insert and update time so the retention job is
 //    a single indexed scan rather than a date calculation per row.
 //  - The retention rule itself lives in shared/idVerification.ts, so it is

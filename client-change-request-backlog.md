@@ -689,6 +689,8 @@ None. OQ 1, 2, 3 and 7 were all answered on 2026-10-03.
 | 6 | Who writes and approves the Filipino and English advice text? This is content work with a subject-matter expert, and it gates the November release. **Still unanswered.** | US-8, US-9, US-10 |
 | 8 | Should a citizen be able to attach media *after* submitting a report, not only during? The client's "Yes" is ambiguous between "yes, after submitting" and "yes, the citizen reports it". | US-5, US-6 |
 | 9 | Do these new fields need to appear in admin reports and exports? | US-1 |
+| 12 | **What should happen to a citizen who registers without a Valid ID?** Today they are locked out: `login` refuses a `PENDING` account and `completeApproval` only issues a session once the account is `APPROVED`, so they cannot sign in, cannot upload an ID later, and leave nothing in the staff review queue. Three options: (a) require an ID at registration, which contradicts the ID being optional; (b) let a `PENDING` citizen sign in but restrict them to the ID upload screen; (c) show ID-less accounts in the review queue as "no ID submitted" so staff can act. **Not yet raised with the client.** | US-2, US-3 |
+| 13 | **Where should resident files be stored in production?** Staging now uses a Railway volume. For production we recommend an S3-compatible bucket (Cloudflare R2 has no egress fees, which matters for a government budget). That needs someone to own the bucket, set the credentials in the Railway dashboard, and accept the data-residency question for resident IDs. | US-2, US-5, US-10 |
 
 > **New risk from OQ 2.** Accepting all ID types means the app cannot verify that a document is genuinely an ID. Staff judgement becomes the control. This raises the value of two things the client has not yet asked for: a confirmation step before a decline is final, and a record of *why* staff declined. Both are cheap to build. Neither is currently in scope.
 
@@ -697,6 +699,8 @@ None. OQ 1, 2, 3 and 7 were all answered on 2026-10-03.
 | # | Note |
 |---|---|
 | 10 | Client item 1 is partly a **bug fix**, not a new feature. The photo upload control in the internal report form has never worked — `client/src/pages/Home.tsx:1531` captures a filename and never calls the mutation. Worth telling them so they know part of that work is smaller than expected. |
+| 11 | **A resident who registers with no ID at all cannot sign in.** The Valid ID is optional at registration, but a `PENDING` citizen is refused by `login` and `completeApproval` only issues a session once the account is already `APPROVED`. So a resident who registers without attaching an ID has an account nobody can reach and no document in the review queue. Staff can force-approve via `updateUserApproval`, but that is a manual override nobody will think to use. Needs a client decision — see OQ 12. |
+| 12 | **Resident files were being written to the container filesystem.** No Railway volume was attached, so every upload would have been discarded on the next deploy. A volume is now attached at `/data`, but no real resident data should be entered until persistence is confirmed against a live deploy. |
 
 ### Proposed by us — pending client confirmation
 
@@ -828,4 +832,41 @@ US-9 landed cheaper than the 7–9 day figure because it reused existing citizen
 | `8137480e` | Seed script explicit exit |
 | `a899a644` | Seed script idempotency fix |
 
-Staging: `https://comfortable-youth-staging.up.railway.app` — all 14 migrations applied and tracked.
+Staging: `https://comfortable-youth-staging.up.railway.app` — all 15 migrations applied and tracked.
+
+### Wave 1 delivery record
+
+| Commit | What |
+|---|---|
+| `7975e6af` | US-2/US-3 first pass: `citizen_id_documents` table, `users.deactivatedAt`, migration `0014`, domain logic with retention, server routes, registration upload, review workspace |
+| `99d322de` | Fix for the ID verification page crash (see below) |
+| tag `wave-1-complete` | Wave 1 checkpoint |
+| tag `wave-1-hotfix-1` | ID verification crash fix |
+
+**Three defects found by client testing after the Wave 1 deploy.** All three are recorded because the pattern matters more than the individual bugs: every one of them passed typecheck and passed its tests, and all three were found only by a person clicking.
+
+1. **`railway up` does not run migrations.** Deploying the code without applying `0014` left the database without `users.deactivatedAt`, so *every login failed for all 13 accounts* with a raw SQL error. Fixed by applying `0014` through the container and recording it in `__drizzle_migrations`. **This will recur on every deploy that includes a migration** and needs a decision before Wave 2.
+2. **A nav item with no descriptor crashed the whole page.** `Home.tsx` returns early for `Overview`, so `Overview` was never a key in the `data` record — meaning the fallback `data[active] ?? data.Overview` resolved to `undefined` for any workspace lacking a descriptor, and `view.rows` threw. The fallback is now an explicit empty view, which also fixed the same latent crash on `Security` for responders. *Residual:* responders now see an empty table on `Security` rather than a crash. That workspace needs a real implementation.
+3. **No file upload had ever worked.** `server/storage.ts` was the Manus WebDev template's storage adapter, gated on `BUILT_IN_FORGE_API_URL` / `BUILT_IN_FORGE_API_KEY`, which are not set on Railway and cannot be obtained. Every call to `storagePut` threw. This affected **all three upload features** — Valid IDs (Wave 1), risk report evidence (earlier wave), and safety advice step photos (Wave 3). Wave 3's step photos have never worked.
+
+### Storage decision
+
+The original adapter would have sent resident government IDs to a third-party development platform. **That was not acceptable and was not done.** Valid IDs are sensitive personal information under the Data Privacy Act (RA 10173), and routing them to an unapproved external service is not a decision we can make.
+
+`server/storage.ts` is now a backend interface with two implementations behind one set of call sites:
+
+- **Volume** (active on staging) — files on a Railway volume. No credentials, no third party. `getSignedUrl` mints a short-lived HMAC URL served by `GET /api/upload/*`, which refuses any request without a valid signature.
+- **S3-compatible** — selected automatically when `S3_BUCKET` and credentials are set. Presigned URLs work as written.
+
+A Railway volume is now attached at `/data`. On startup the server warns loudly if uploads would land on an ephemeral filesystem. Migration to a bucket is tracked as OQ 13.
+
+**Registration behaviour changed.** The ID was previously validated and stored *before* the account was created, so a bad upload failed registration outright. That was sound in principle, but a storage outage then destroyed everything the resident had typed. The account is now created first and the ID attached second; on failure the resident keeps their account and retries on the same screen via `localAuth.uploadPendingId`, authorized by the registration approval token. The token is used because a `PENDING` citizen cannot sign in by any route, so an account created without an ID would otherwise be permanently stuck.
+
+### Test coverage
+
+| Suite | Tests |
+|---|---|
+| `shared/idVerification.test.ts` | 34 |
+| `server/id-verification-router.test.ts` | 18 |
+| `server/storage.test.ts` | 33 |
+| Full suite | 197 passing across 18 files |

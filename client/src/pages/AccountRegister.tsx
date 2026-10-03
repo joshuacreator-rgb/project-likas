@@ -101,11 +101,28 @@ export default function AccountRegister({
     sizeBytes: number;
   } | null>(null);
   const [validIdError, setValidIdError] = useState("");
+  /**
+   * Set when the account was created but the ID could not be stored. The
+   * resident stays on this page and retries below: a pending citizen cannot
+   * sign in, so there is no account page to return to.
+   */
+  const [idUploadFailed, setIdUploadFailed] = useState(false);
   const selected = roles.find(item => item.value === role) ?? roles[3];
   const register = trpc.localAuth.register.useMutation({
     onSuccess: result => {
       setApprovalToken(result.approvalToken);
       setApprovalPending(true);
+      if (result.idUploadFailed) setIdUploadFailed(true);
+    },
+    onError: error => {
+      setNotice(error.message);
+    },
+  });
+  const uploadPendingId = trpc.localAuth.uploadPendingId.useMutation({
+    onSuccess: () => {
+      setIdUploadFailed(false);
+      setValidId(null);
+      setNotice("Your ID was received and is now waiting for review.");
     },
     onError: error => {
       setNotice(error.message);
@@ -337,6 +354,31 @@ export default function AccountRegister({
         <span className="eyebrow">Application received</span>
         <h2>Waiting for approval</h2>
         <p>Your citizen account is waiting for an Administrator to review and accept it. This page will continue automatically after approval.</p>
+        {idUploadFailed ? <div className="registration-id-retry">
+          <h3>Your ID did not upload</h3>
+          <p>Your account was created, but we could not save your Valid ID. Nothing else you entered was lost. Please upload it again so an Administrator can review it.</p>
+          <label className="registration-id-retry-label">
+            Valid ID
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp,application/pdf"
+              aria-invalid={validIdError ? true : undefined}
+              onChange={handleValidIdChange}
+            />
+          </label>
+          {validIdError ? <span className="registration-id-error" role="alert">{validIdError}</span> : null}
+          <Button
+            type="button"
+            disabled={!validId || uploadPendingId.isPending}
+            onClick={() => {
+              if (!validId) return;
+              uploadPendingId.mutate({ token: approvalToken, validId });
+            }}
+          >
+            {uploadPendingId.isPending ? "Uploading..." : "Upload my ID"}
+          </Button>
+          {uploadPendingId.error ? <span className="registration-id-error" role="alert">{uploadPendingId.error.message}</span> : null}
+        </div> : null}
         <div className="registration-pending-dots" aria-hidden="true"><i /><i /><i /></div>
       </div> : <form
         className="login-form"
