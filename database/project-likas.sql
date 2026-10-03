@@ -10,6 +10,11 @@ CREATE TABLE IF NOT EXISTS `users` (
   `accountStatus` enum('PENDING','APPROVED','REJECTED') NOT NULL DEFAULT 'APPROVED',
   `role` enum('user','admin','staff','responder','citizen') NOT NULL DEFAULT 'citizen',
   `phone` varchar(40),
+  `firstName` varchar(80),
+  `middleName` varchar(80),
+  `lastName` varchar(80),
+  `address` text,
+  `age` int,
   `emailVerifiedAt` timestamp NULL,
   `isDemo` boolean NOT NULL DEFAULT false,
   `demoExpiresAt` timestamp NULL,
@@ -266,4 +271,48 @@ CREATE TABLE IF NOT EXISTS `role_change_requests` (
   CONSTRAINT `role_change_requests_requesterId_users_id_fk` FOREIGN KEY (`requesterId`) REFERENCES `users` (`id`),
   CONSTRAINT `role_change_requests_approverId_users_id_fk` FOREIGN KEY (`approverId`) REFERENCES `users` (`id`),
   CONSTRAINT `role_change_requests_userId_users_id_fk` FOREIGN KEY (`userId`) REFERENCES `users` (`id`)
+);
+
+CREATE TABLE IF NOT EXISTS `safety_advice` (
+  `id` int AUTO_INCREMENT NOT NULL,
+  `slug` varchar(120) NOT NULL,
+  `category` varchar(40) NOT NULL,
+  `title` varchar(180) NOT NULL,
+  `titleFilipino` varchar(180),
+  `summary` text NOT NULL,
+  `summaryFilipino` text,
+  `body` text NOT NULL,
+  `bodyFilipino` text,
+  `status` enum('DRAFT','PUBLISHED','ARCHIVED') NOT NULL DEFAULT 'DRAFT',
+  `isEmergency` boolean NOT NULL DEFAULT false,
+  `sortOrder` int NOT NULL DEFAULT 0,
+  `publishedAt` timestamp NULL,
+  `archivedAt` timestamp NULL,
+  `createdBy` int,
+  `createdAt` timestamp NOT NULL DEFAULT (now()),
+  `updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `safety_advice_slug_unique` (`slug`),
+  KEY `advice_status_idx` (`status`),
+  KEY `advice_category_idx` (`category`),
+  CONSTRAINT `safety_advice_createdBy_users_id_fk` FOREIGN KEY (`createdBy`) REFERENCES `users` (`id`)
+);
+
+-- Steps are a child table rather than a JSON column so they can be reordered,
+-- validated and queried independently. Deleting advice cascades to its steps.
+CREATE TABLE IF NOT EXISTS `advice_steps` (
+  `id` int AUTO_INCREMENT NOT NULL,
+  `adviceId` int NOT NULL,
+  `stepNo` int NOT NULL,
+  `title` varchar(180),
+  `titleFilipino` varchar(180),
+  `instruction` text,
+  `instructionFilipino` text,
+  `imageUrl` varchar(1000),
+  `imageKey` varchar(500),
+  `createdAt` timestamp NOT NULL DEFAULT (now()),
+  `updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `advice_step_order_idx` (`adviceId`,`stepNo`),
+  CONSTRAINT `advice_steps_adviceId_safety_advice_id_fk` FOREIGN KEY (`adviceId`) REFERENCES `safety_advice` (`id`) ON DELETE cascade
 );

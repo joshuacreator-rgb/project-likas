@@ -1,9 +1,11 @@
 # Project Likas — Client Change Request Backlog
 
 **Source**: Client request (Tagalog), reviewed against the codebase
-**Date**: 2026-09-30
-**Status**: Draft — awaiting client confirmation on blocking questions
+**Date**: 2026-09-30 · **Last updated**: 2026-10-03
+**Status**: Wave 3 delivered to staging. Awaiting client confirmation on the blocking questions and on items marked *Proposed*.
 **Prepared by**: BA review of `C:\Users\joshua-macailao\Documents\project-likas\project-likas`
+
+> **Scope change agreed with the client (2026-10-03).** The client asked for advice *videos* (request 2). When the cost of video was raised they offered **step-by-step photos** as an acceptable substitute for the November release. Video is therefore **deferred to a follow-on**, and US-8/US-9/US-10 ship advice text plus photos. See US-10 and section 7.
 
 ---
 
@@ -14,6 +16,16 @@
 3. "Tapus register, I hope meron nakalagay ng complete Name, Address, Age, Cp number" — At registration, collect complete Name, Address, Age, and CP number.
 4. "Mag uupload sila ng Valid ID at ito dapat yung nirereview ni Admin kung taga Pateros sya bago mag karoon ng account" — Citizens upload a Valid ID; an Administrator reviews it to confirm they are from Pateros before they get an account.
 
+**Client answers received on follow-up (recorded 2026-10-03)**
+
+| # | Question asked | Client answer | Effect |
+|---|---|---|---|
+| A1 | Is Gmail-only registration still correct? | **Yes.** | OQ 4 closed. Gmail-only registration is confirmed as the intended rule. |
+| A2 | Advice videos are expensive — photos instead? | **Photos are acceptable** as the substitute for video. | US-10 created. Video deferred to a follow-on. |
+| A3 | Should the Valid ID block be re-asked? | **Skipped entirely.** | OQ 1, 2 and 3 remain unanswered. Wave 1 stays blocked. |
+| A4 | Is BFP (Bureau of Fire Protection) a separate role? | **No** — handled by the existing responder role. | No new role needed. Given verbally; *confirm in writing*. |
+| A5 | Should the new registration fields appear in admin reports and exports? | Not answered. | OQ 9 stays open. |
+
 ---
 
 ## 2. Code review findings
@@ -23,22 +35,27 @@ What the client assumes vs. what actually exists in the codebase.
 | # | Client assumes | Reality in code |
 |---|---|---|
 | 1 | Photo/video upload does not exist | Backend **does** exist: `operations.uploadEvidence` (images + PDF only, 10 MB cap, S3). The UI is **broken** — `client/src/pages/Home.tsx:1531` captures a filename and never calls the mutation. Nothing has ever been uploaded from the UI. The citizen page has no file input at all. **Video is rejected by the server today.** |
-| 2 | Advice/videos are new | Correct, nothing exists. Bilingual precedent exists (`alerts.titleFilipino`, `alerts.messageFilipino`). |
+| 2 | Advice/videos are new | Correct, nothing existed. Bilingual precedent exists (`alerts.titleFilipino`, `alerts.messageFilipino`). Advice text and step photos are now built; video is not. |
 | 3 | Registration is missing fields | Correct. `client/src/pages/AccountRegister.tsx` collects only role, name, email, password. `users` table has a `phone` column but **no `address`, `age`, or `barangay` column**. |
 | 4 | Admin review of Valid ID is needed | The approval loop **already works** — `admin.updateUserApproval`, Approve/Decline buttons at `Home.tsx:2243`, citizen polls `localAuth.checkApproval` every 500 ms. This request **adds a step**, it does not require building the loop. |
 
 ### 2.1 Schema changes required
 
-- `users`: add `address`, `age`. Reuse existing `phone` for CP number.
-- New table for citizen ID documents (US-2).
-- New table for safety advice (US-8).
+| Table | Change | Story | Status |
+|---|---|---|---|
+| `users` | add `address`, `age`; reuse existing `phone` for CP number | US-1 | **Applied** — migration `0012` |
+| new | citizen ID documents table | US-2 | Not started — blocked on OQ 1–3 |
+| `safety_advice` | new table: slug, category, bilingual title/summary/body, status, `isEmergency`, `sortOrder`, `publishedAt`, `archivedAt`, `createdBy` | US-8 | **Applied** — migration `0013` |
+| `advice_steps` | new child table: `adviceId`, `stepNo`, bilingual title and instruction, `imageUrl`, `imageKey`; composite index on `(adviceId, stepNo)`, `ON DELETE CASCADE` | US-10 | **Applied** — migration `0013` |
+
+Note: `database/project-likas.sql` is the schema reference and **needs regenerating** to include `safety_advice` and `advice_steps`. It was last refreshed in `500dcaaf`.
 
 ### 2.2 Pre-existing issues found during review
 
 | Issue | Location | Impact on this backlog |
 |---|---|---|
 | Evidence upload UI never calls the mutation | `client/src/pages/Home.tsx:1531` | Part of the client's item 1 is a bug fix, not new work |
-| `database/project-likas.sql` is stale — missing `weather_snapshots` and `role_change_requests` | `database/project-likas.sql` | If treated as the schema reference, will mislead whoever implements these stories |
+| `database/project-likas.sql` was stale — missing `weather_snapshots` and `role_change_requests` | `database/project-likas.sql` | Regenerated in `500dcaaf`, but now stale again — missing `safety_advice` and `advice_steps` |
 | `verifyLocalEmail` is defined in `server/db.ts` and mocked in a test, but no router procedure calls it | `server/db.ts:108` | `emailVerifiedAt` is never set. Email verification is a dead half-feature. Not in scope for this request. |
 | `admin.queueReportExport` and the `report_exports` table exist with no UI | `server/routers.ts:1145` | Not in scope for this request. |
 
@@ -57,6 +74,8 @@ Required instead:
 - Thumbnail generation for video
 
 Additional conflict: this must work alongside the existing **offline report queue** in `CitizenHome.tsx`. A citizen offline during a flood is exactly the person most likely to film it.
+
+> **Resolution (2026-10-03)**: advice video is **deferred to a follow-on**; Wave 3 ships text plus step-by-step photos (US-10). Citizen **report** video (US-6) is unaffected and still blocked on OQ 5. The engineering described above is a prerequisite for both and has not been started.
 
 ### 3.2 A Valid ID is regulated personal data
 
@@ -390,77 +409,86 @@ so that I can assess severity and the resources needed before I leave the statio
 
 ---
 
-### Epic: Safety Advice and Preparation Videos
+### Epic: Safety Advice and Preparation Media
 
 **Goal**: Give citizens clear, actionable preparedness guidance before a disaster.
 **Actors**: Administrator, Citizen
+**Status**: Delivered to staging 2026-10-03 (commits `6a738a84`, `8137480e`, `a899a644`)
 
 ---
 
-#### US-8: Administrator publishes safety advice with a video
+#### US-8: Administrator publishes safety advice
 
 **Story**
 As an Administrator,
-I want to publish preparedness advice and a video for each hazard — earthquake, storm, and fire,
+I want to publish preparedness advice for each hazard — earthquake, storm, and fire,
 so that citizens know exactly what to do before and during a disaster.
 
 **Type**: New
 **Priority**: Must
+**Status**: Implemented and deployed to staging. The video criteria were moved to US-10 and the follow-on below.
 
 **Acceptance Criteria**
 
-1. Create advice
+1. Create advice as a draft
    - Given I am an Administrator
-   - When I create advice for a hazard with an English title, Filipino title, English body, Filipino body, and an optional video
-   - Then the advice is saved and immediately visible to citizens
+   - When I create advice for a hazard with an English title, Filipino title, English summary, English body
+   - Then it is saved as a **draft** and is **not** visible to the public until I publish it
 
 2. Hazards covered
    - Given I create advice
    - When I select a hazard
-   - Then I can choose from Earthquake, Storm, or Fire
+   - Then I can choose from Earthquake, Storm/Typhoon, Flooding, Fire, or General safety
 
-3. Video upload
-   - Given I attach a video to an advice item
-   - When I save
-   - Then it uploads and plays in the browser for citizens
-
-4. Video is optional
+3. Photo is optional
    - Given I create an advice item with text only
    - When I save
-   - Then it is published and shown to citizens without a video
+   - Then it is saved and can be published without any photo attached
 
-5. Bilingual content
+4. Bilingual content
    - Given I create an advice item
    - When I leave the Filipino fields blank
    - Then citizens viewing the app in Filipino see the English text instead of an empty section
 
-6. Editing and unpublishing
+5. Publishing is gated
+   - Given an item has no title, no body, or no step carrying an instruction or a photo
+   - When I press Publish
+   - Then publishing is refused and I am told which field is missing
+
+6. Editing, unpublishing, archiving
    - Given an advice item is live
-   - When I edit it or unpublish it
-   - Then the change takes effect for citizens, and unpublishing removes it from their view without deleting it
+   - When I edit it, unpublish it, or archive it
+   - Then the change takes effect for citizens, and archiving or unpublishing removes it from their view **without deleting it**
 
 7. Access control
-   - Given I am signed in as Citizen, Staff, or Responder
-   - When I attempt to open the advice management view
+   - Given I am signed in as Citizen, Staff, or Responder, or I have no session at all
+   - When I attempt to open the advice management view or call its endpoints
    - Then access is denied
 
+8. Audit trail
+   - Given I create, edit, publish, archive, or delete advice
+   - When the action completes
+   - Then it is recorded in the activity log against my user id
+
 **Notes**
-- **Builds on**: `alerts` bilingual precedent (`titleFilipino`, `messageFilipino`) — follow the same fallback pattern
-- **Requires new table**, e.g. `safety_advice` (hazard, title, titleFilipino, body, bodyFilipino, videoKey, videoUrl, isPublished, sortOrder, updatedBy)
-- **Business rules**: follow the existing `alerts.isActive` toggle pattern rather than deleting content
-- **Open Question 6** — who writes and signs off on the Filipino and English text? This is content work, not development, and it gates release
+- **Built as**: `safety_advice` (slug, category, bilingual title/summary/body, `DRAFT`/`PUBLISHED`/`ARCHIVED`, `isEmergency`, `sortOrder`, `publishedAt`, `archivedAt`, `createdBy`) plus the `advice_steps` child table.
+- **Follows**: the `alerts` bilingual precedent (`titleFilipino`, `messageFilipino`) and the "toggle, do not delete" rule from `alerts.isActive`, generalised into an explicit status column.
+- **Category is `varchar` with a shared allowlist, not a MySQL enum**, so the DRRM office can add a hazard type without a database migration. Adding one is still a code change plus a redeploy.
+- **Photo upload is admin-only**, image formats only (JPEG/PNG/WebP/GIF, 5 MB), revalidated server-side because client-supplied mime types are not trusted.
+- **Open Question 6 is still unanswered and still gates the November release**: nobody has been named to author and approve the Filipino and English text.
 
 ---
 
-#### US-9: Citizen views safety advice and preparation videos
+#### US-9: Citizen views safety advice
 
 **Story**
 As a citizen,
-I want to read simple preparation advice and watch a short video for earthquake, storm, and fire,
+I want to read simple preparation advice for earthquake, storm, and fire,
 so that I know what to do before a disaster happens.
 
 **Type**: New
 **Priority**: Must
+**Status**: Implemented and deployed to staging. The video criteria were moved to US-10.
 
 **Acceptance Criteria**
 
@@ -469,100 +497,262 @@ so that I know what to do before a disaster happens.
    - When I look for preparation advice
    - Then I can read it without creating an account
 
-2. All three hazards
+2. Hazard filter
    - Given I open the advice section
    - When I browse
-   - Then I can switch between Earthquake, Storm, and Fire
+   - Then I can filter between the hazards that have published guidance, and choose to show all
 
-3. Video playback
-   - Given an advice item has a video
-   - When I tap play
-   - Then the video plays in the browser with captions available
+3. Non-residents can read it too
+   - Given I am not a Pateros resident and have no account
+   - When I read safety advice
+   - Then it is served to me, because visitors evacuating through Pateros need the same instructions
 
-4. Language toggle
+4. Drafts and archived items are never exposed
+   - Given an item is a draft or is archived
+   - When I request the advice list, or that item directly
+   - Then it is not returned
+
+5. Language toggle
    - Given I have switched the app to Filipino
    - When I open the advice
-   - Then I see the Filipino title and body, and the Filipino video if one was provided, otherwise the English video
+   - Then I see the Filipino title, summary, body, and step text, falling back to English field by field
 
-5. Accessibility
+6. Accessibility
    - Given I use the "Read this page" text-to-speech control
-   - When I am on the advice section
+   - When I am on the advice section, or on a single advice item
    - Then the advice text is read aloud in my selected language
 
-6. Large text mode
+7. Large text mode
    - Given I have turned on larger text
    - When I read the advice
-   - Then the text and video remain fully usable and nothing is cut off
+   - Then the text remains fully usable and nothing is cut off
 
-7. Offline
+8. Offline
    - Given I have no internet connection
    - When I open previously viewed advice
-   - Then I see a clear "no connection" message and the advice I already opened remains readable
+   - Then I see a clear message, and the guidance already cached on the device remains readable
 
-8. Empty state
+9. Empty state
    - Given an Administrator has not published advice for a hazard yet
-   - When I open that hazard
+   - When I open the advice section
    - Then I see a clear message that guidance is not available yet, not a blank screen
 
+10. Urgent guidance is pinned first
+    - Given an Administrator has marked an item urgent
+    - When I open the advice section
+    - Then that item appears above the rest
+
 **Notes**
-- **Builds on**: `client/src/pages/CitizenHome.tsx`, `citizenCopy` in `shared/citizen.ts` (add new `en`/`fil` keys for all new copy), the existing `speakText` TTS helper, `largeText` state, and the offline cache pattern in `likas-cached-centers`
-- **Business rules**: mirror the existing `getRiskReportHeadline` / `citizenCopy` fallback convention — never show an empty Filipino block
-- **Out of scope**: personalizing advice by household profile, quizzes, certification
+- **Delivered under the original 7–9 day estimate** because it reuses existing citizen infrastructure: the `speakText` TTS helper, the `largeText` toggle, the language toggle, the `citizenCopy` bilingual fallback, and the `likas-cached-centers` offline cache pattern (mirrored as `likas-cached-advice`).
+- **Access rule**: `advice.list` and `advice.detail` are `publicProcedure`; authoring is `adminProcedure`. Locked down by `server/advice-router.test.ts`.
+- **Business rules**: mirror the existing `getRiskReportHeadline` / `citizenCopy` fallback convention — never show an empty Filipino block.
+- **Out of scope**: personalising advice by household profile, quizzes, certification.
+
+---
+
+#### US-10: Administrator attaches step-by-step photos — *client substitute for video*
+
+**Story**
+As an Administrator,
+I want to attach a photo to each step of my safety advice,
+so that residents who are panicking, or who read more easily with pictures than text, can follow the guidance visually.
+
+**Type**: New
+**Priority**: Must (for November)
+**Status**: Implemented and deployed to staging.
+**Origin**: Not an analyst invention. The client asked for videos; when the cost was raised they offered step-by-step photos instead.
+
+**Acceptance Criteria**
+
+1. Steps stay ordered
+   - Given an advice item has several steps
+   - When I reorder or remove them in the editor
+   - Then the numbering that gets saved matches the order I see, starting at 1, with no gaps
+
+2. Blank steps are discarded
+   - Given I left a step completely empty
+   - When I save
+   - Then it is discarded rather than creating an empty instruction
+
+3. One photo per step
+   - Given I attach a photo to a step
+   - When I save and a citizen opens the advice
+   - Then the photo appears beside that step's text
+
+4. Photo formats and size are enforced
+   - Given I attach a file that is not a JPEG, PNG, WebP or GIF, or one over 5 MB
+   - When I upload it
+   - Then the upload is refused with a clear message
+
+5. Photo is optional per step
+   - Given some steps have photos and others do not
+   - When I publish
+   - Then publishing still succeeds
+
+6. A photo alone is enough to publish
+   - Given a step carries a photo but no written instruction
+   - When I publish
+   - Then the item is publishable
+
+**Notes**
+- **Built as**: `advice_steps` (`adviceId`, `stepNo`, `title`, `titleFilipino`, `instruction`, `instructionFilipino`, `imageUrl`, `imageKey`) with a composite index on `(adviceId, stepNo)` and `ON DELETE CASCADE`. Modelled as a child table rather than a JSON column so steps can be reordered, validated and queried independently.
+- **Steps are replaced wholesale on save** so reordering in the editor cannot leave duplicate or orphaned rows.
+- **Placeholder content is seeded as drafts only.** `server/seed-advice.ts` writes three generic items for demo and QA purposes; publishing them requires an explicit `--publish` flag. The seeded wording is marked as a placeholder and **must be replaced by the DRRM office**, not shipped as official guidance.
+
+**Follow-on, not estimated and not started — advice video**
+The video acceptance criteria originally written into US-8 and US-9 are not delivered and are not abandoned. A follow-on estimate should cover: presigned multipart direct-to-S3 upload, a poster thumbnail, captions, bandwidth-aware playback, and offline handling. Prerequisite engineering is described in section 3.1.
 
 ---
 
 ## 5. Open Questions
 
+### Answered
+
+| # | Question | Client answer | Closed |
+|---|---|---|---|
+| 4 | Is the existing Gmail-only registration rule still correct? A senior citizen registering for evacuation support may not have a Gmail address. | **Yes — keep Gmail-only.** | 2026-10-03 |
+| 11 | `database/project-likas.sql` is stale and missing two tables. | Regenerated from the live schema in commit `500dcaaf`. Needs one more refresh now that the advice tables exist. | 2026-10-02 |
+
 ### Blocking — cannot build without an answer
+
+The client was asked to answer these on 2026-10-03 and **skipped the entire block**. US-2 and US-3 cannot start until they reply.
 
 | # | Question | Affects |
 |---|---|---|
 | 1 | How is "taga Pateros" proven? By the address on the Valid ID? By a declared barangay? Is a Pateros address on the ID enough, or must it be a specific ID type? | US-1, US-2, US-3 |
 | 2 | Which IDs are accepted? PhilSys ID, Barangay ID, driver's license, utility bill, passport? | US-2, US-3 |
 | 3 | How long are Valid IDs stored, especially for rejected applicants? Data privacy law requires a stated retention period. Keeping a rejected applicant's government ID indefinitely is a real legal exposure. | US-2, US-3 |
-| 4 | Is the existing Gmail-only registration rule still correct? A senior citizen registering for evacuation support may not have a Gmail address. | US-1 |
 
 ### Needed before build
 
 | # | Question | Affects |
 |---|---|---|
-| 5 | Are 60 seconds and 50 MB acceptable for citizen video? Will this be used on low-end phones with unstable mobile data? | US-6 |
-| 6 | Who writes and approves the Filipino and English advice text and selects the videos? This is content work with a subject-matter expert, and it gates release. | US-8, US-9 |
-| 7 | Should the Valid ID be visible to Evacuation Center Staff, or Administrators only? *(currently assumed Administrators only)* | US-3 |
-| 8 | Should a citizen be able to attach media *after* submitting a report, not only during? | US-5, US-6 |
+| 5 | Are 60 seconds and 50 MB acceptable for citizen video? Will this be used on low-end phones with unstable mobile data? **The client answered "kahit ilan second" — "any number of seconds" — which sets no limit at all and is not implementable as written. A cap has to be agreed.** | US-6 |
+| 6 | Who writes and approves the Filipino and English advice text? This is content work with a subject-matter expert, and it gates the November release. **Still unanswered.** | US-8, US-9, US-10 |
+| 7 | Should the Valid ID be visible to Evacuation Center Staff, or Administrators only? *(currently assumed Administrators only)* **The client has answered both ways** — "only Administration" in one place, while also describing staff checking IDs in person during evacuation. Needs one clear ruling. | US-3 |
+| 8 | Should a citizen be able to attach media *after* submitting a report, not only during? The client's "Yes" is ambiguous between "yes, after submitting" and "yes, the citizen reports it". | US-5, US-6 |
 | 9 | Do these new fields need to appear in admin reports and exports? | US-1 |
 
 ### Flagged for the client, not blocking
 
 | # | Note |
 |---|---|
-| 10 | Client item 1 is partly a **bug fix**, not a new feature. The photo upload control in the internal report form has never worked. Worth telling them so they know part of that work is smaller than expected. |
-| 11 | `database/project-likas.sql` is stale and missing two tables. If the client treats it as the schema reference, it will mislead whoever implements these stories. |
+| 10 | Client item 1 is partly a **bug fix**, not a new feature. The photo upload control in the internal report form has never worked — `client/src/pages/Home.tsx:1531` captures a filename and never calls the mutation. Worth telling them so they know part of that work is smaller than expected. |
+
+### Proposed by us — pending client confirmation
+
+These were analyst decisions, not client instructions. They are implemented and live on staging. If the client disagrees, the change is cheap now and expensive after the DRRM office has authored real content.
+
+| # | Proposal | Status |
+|---|---|---|
+| P1 | **Advice is public — no login required.** Anyone can read published guidance, including non-residents sheltering in Pateros. | Built and deployed. Confirm. |
+| P2 | **Two extra hazard categories**: `FLOOD` and `GENERAL`, beyond the earthquake/storm/fire the client named. Pateros floods; some guidance is not hazard-specific. | Built and deployed. Confirm or remove. |
+| P3 | **Publishing is gated**: an item needs a title, summary and body, plus at least one step with an instruction or a photo. | Built and deployed. |
+| P4 | **DRAFT → PUBLISHED → ARCHIVED**, with archived items returnable to draft for revision. Nothing is hard-deleted from the admin view. | Built and deployed. |
+| P5 | **Category is a validated list, not a MySQL enum**, so the DRRM office can add a hazard type without a database migration. | Built and deployed. |
+| P6 | **BFP is handled by the existing `responder` role**; no new role was created. | Built. Confirm in writing. |
 
 ---
 
 ## 6. Summary
 
-| Story | Title | Type | Priority | Requested by client |
-|---|---|---|---|---|
-| US-1 | Register with complete personal details | Change | Must | Yes (item 3) |
-| US-2 | Upload a Valid ID during registration | New | Must | Yes (item 4) |
-| US-3 | Administrator reviews Valid ID and verifies Pateros residency | Change | Must | Yes (item 4) |
-| US-4 | Applicant resubmits a rejected ID | Suggested | Could | No |
-| US-5 | Citizen attaches a photo to an emergency report | Change | Must | Yes (item 1) |
-| US-6 | Citizen attaches a short video to an emergency report | New | Must | Yes (item 1) |
-| US-7 | Responder and Administrator view report attachments | Suggested | Should | No |
-| US-8 | Administrator publishes safety advice with a video | New | Must | Yes (item 2) |
-| US-9 | Citizen views safety advice and preparation videos | New | Must | Yes (item 2) |
+| Story | Title | Type | Priority | Requested by client | Status |
+|---|---|---|---|---|---|
+| US-1 | Register with complete personal details | Change | Must | Yes (item 3) | **Done** (`4a0de779`) |
+| US-2 | Upload a Valid ID during registration | New | Must | Yes (item 4) | Blocked on OQ 1–3 |
+| US-3 | Administrator reviews Valid ID and verifies Pateros residency | Change | Must | Yes (item 4) | Blocked on OQ 1–3, 7 |
+| US-4 | Applicant resubmits a rejected ID | Suggested | Could | No | Not started |
+| US-5 | Citizen attaches a photo to an emergency report | Change | Must | Yes (item 1) | Not started (UI is broken today) |
+| US-6 | Citizen attaches a short video to an emergency report | New | Must | Yes (item 1) | Blocked on OQ 5, 8 |
+| US-7 | Responder and Administrator view report attachments | Suggested | Should | No | Not started |
+| US-8 | Administrator publishes safety advice | New | Must | Yes (item 2) | **Done** (`6a738a84`) |
+| US-9 | Citizen views safety advice | New | Must | Yes (item 2) | **Done** (`6a738a84`) |
+| US-10 | Administrator attaches step-by-step photos | New | Must | Yes — offered as a substitute for video | **Done** (`6a738a84`) |
 
-**Total: 9 stories** (7 requested by the client, 2 marked Suggested).
+**Total: 10 stories** (8 requested by the client, 2 marked Suggested). **3 delivered**, **3 blocked on client answers**, **4 not started**.
 
 US-4 and US-7 are analyst proposals, not client requests. Confirm with the client before they enter the backlog.
 
+US-8, US-9 and US-10 ship **text and photos**. The advice **video** the client originally asked for is not delivered — it is a follow-on requiring its own estimate (see section 3.1).
+
 ---
 
-## 7. References
+## 7. Delivery waves and estimates
 
-- Epic 1–3 map to the client's four requests in section 1
+### Wave order was changed
+
+The waves were originally sequenced bottom-up. They were **reordered to run 3 → 2 → 1** so that the advice feature lands first, because the client has a **November defence deadline** and safety advice is the most demonstrable part of the request.
+
+| Wave | Contents | Original order | Status |
+|---|---|---|---|
+| **Wave 3** | US-8, US-9, US-10 — safety advice with step photos | 3rd | **Delivered to staging** |
+| **Wave 2** | US-5, US-6, US-7 — photo/video evidence on reports | 2nd | Not started, blocked on OQ 5 and 8 |
+| **Wave 1** | US-1, US-2, US-3, US-4 — registration details and Valid ID verification | 1st | US-1 done; rest blocked on OQ 1–3 |
+
+**The exact November date is still unknown.** "By November" leaves a 3.5-week swing, which is larger than Wave 3 itself. The date needs confirming before the remaining schedule means anything.
+
+### Estimates
+
+| Wave | Scope | Estimate (person-days) |
+|---|---|---|
+| Wave 1 | US-1, US-2, US-3, US-4 | 10–13 |
+| Wave 2 | US-5, US-6, US-7 | 13–17 |
+| Wave 3 | US-8, US-9, US-10 | 7–9 |
+| **Subtotal, feature work** | | **30–39** |
+| Cross-wave integration, end-to-end QA, handover, deployment | | 5–6 |
+| **Total** | | **35–45** |
+
+This resolves an inconsistency in the original figures: the waves summed to 30–39 while the headline figure was 35–45. The 5–6 day gap is **cross-cutting work** — integrating the three waves against each other, end-to-end QA, and handover — not feature work inside any single wave. It is named here so the two numbers can be reconciled.
+
+### Two things the estimate does not cover
+
+**1. Advice content.** Wave 3's 7–9 days buys the *machinery* — the authoring workspace, the publish gate, the public view, photo upload. It does not buy the **Filipino and English safety wording**. That is content work with a subject-matter expert, it has no owner, and it sits directly on the November critical path (OQ 6). If it is not assigned now, the feature will be technically complete and publicly empty on the day. Estimate **1–2 weeks of non-development effort**, or more if the material has to be drafted from scratch rather than adapted.
+
+**2. Advice video.** Deferred. Needs its own estimate before it can be scheduled.
+
+### Wave 3 came in under estimate
+
+US-9 landed cheaper than the 7–9 day figure because it reused existing citizen infrastructure — the `speakText` TTS helper, the large-text toggle, the language toggle, the bilingual `citizenCopy` fallback, and the existing offline cache pattern — instead of building parallel versions of each. The remaining budget was spent on the admin authoring workspace and the publish gate.
+
+---
+
+## 8. References
+
+- Epic 1–4 map to the client's four requests in section 1
 - Business rules reused from existing behaviour: transactional occupancy in `server/db.ts`, report status machine in `shared/operations.ts` (`canTransitionReport`), alert audience targeting in `shared/operations.ts` (`alertsVisibleToRole`), bilingual fallback in `shared/citizen.ts` (`citizenCopy`, `getRiskReportHeadline`)
 - Existing citizen approval flow: `localAuth.register` → `localAuth.checkApproval` → `admin.updateUserApproval` (`server/routers.ts`)
+
+### Wave 3 implementation map
+
+| Concern | File |
+|---|---|
+| Domain logic — bilingual fallback, status machine, publish gate, slug generation | `shared/advice.ts` |
+| Schema — `safety_advice`, `adviceSteps` | `drizzle/schema.ts` |
+| Migration | `drizzle/0013_safety_advice.sql` |
+| Data access, transactional step replacement | `server/db.ts` |
+| Endpoints — public `list`/`detail`, admin authoring | `server/routers.ts` |
+| Admin authoring workspace | `client/src/pages/Home.tsx` |
+| Public citizen view | `client/src/pages/CitizenHome.tsx` |
+| Placeholder content seeder | `server/seed-advice.ts` |
+
+### Test coverage
+
+| Suite | Tests | Covers |
+|---|---|---|
+| `shared/advice.test.ts` | 22 | Bilingual fallback, status transitions, publish gate, slug uniqueness, step normalisation, mime/size rules |
+| `server/advice-router.test.ts` | 12 | Public read is unauthenticated; every authoring, status-change, delete and upload path refuses non-admins |
+| Total project suite | 112 | `pnpm check`, `pnpm test`, `pnpm build` all green |
+
+### Delivery record
+
+| Commit | Contents |
+|---|---|
+| `34642211` | This backlog document |
+| `4a0de779` | US-1 registration details, migration `0012` |
+| `500dcaaf` | Evidence upload UI fix, `database/project-likas.sql` refresh |
+| `541bfe86` | Test-runner include fix; whitespace bug in `citizenReportTypeFromDanger` |
+| `6a738a84` | Wave 3 — US-8, US-9, US-10 |
+| `8137480e` | Seed script explicit exit |
+| `a899a644` | Seed script idempotency fix |
+
+Staging: `https://comfortable-youth-staging.up.railway.app` — all 14 migrations applied and tracked.
