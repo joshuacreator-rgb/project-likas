@@ -218,7 +218,13 @@ async function main() {
     );
 }
 
-main().catch(error => {
-  console.error(error);
-  process.exitCode = 1;
-});
+main()
+  .then(() => {
+    // Importing server/db.ts pulls in the realtime broadcaster, which leaves an
+    // open handle, so the process would otherwise hang after finishing.
+    process.exit(0);
+  })
+  .catch(error => {
+    console.error(error);
+    process.exit(1);
+  });
