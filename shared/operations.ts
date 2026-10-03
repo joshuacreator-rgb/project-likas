@@ -69,9 +69,13 @@ const legacyCitizenEmergencyLabel = /^citizen emergency$/i;
 
 /** Short label stored as reportType for citizen submissions (max 80 chars). */
 export function citizenReportTypeFromDanger(danger: string): string {
-  const normalized = danger.trim().replace(/\s+/g, " ");
-  if (!normalized) return "Emergency report";
-  const firstLine = normalized.split(/\r?\n/)[0]?.trim() || normalized;
+  // Split on line breaks before collapsing whitespace, otherwise the first-line
+  // rule below never applies and a multi-line report becomes the whole headline.
+  const firstLine = danger
+    .split(/\r?\n/)
+    .map(line => line.trim().replace(/\s+/g, " "))
+    .find(Boolean);
+  if (!firstLine) return "Emergency report";
   if (firstLine.length <= 80) return firstLine;
   return `${firstLine.slice(0, 77).trimEnd()}...`;
 }
