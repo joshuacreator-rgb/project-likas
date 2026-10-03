@@ -1,12 +1,13 @@
-import { eq, sql, and, asc, desc, inArray, isNull, gt, or } from "drizzle-orm";
+import { eq, sql, and, asc, desc, inArray, isNull, isNotNull, gt, lte, or } from "drizzle-orm";
 import { compare, hash } from "bcryptjs";
 import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import { generateResetToken, hashResetToken, verifyResetToken } from "./resetTokens";
 import { createTotpUri, generateTotpSecret, verifyTotpCode } from "./totp";
 import { drizzle } from "drizzle-orm/mysql2";
-import { activityLogs, adviceSteps, alerts, authCredentials, centerStaff, evidenceFiles, evacuationCenters, invitations, evacuees, InsertUser, resources, resourceTransactions, responderActions, reportExports, riskReports, roleChangeRequests, safetyAdvice, systemSettings, users, weatherSnapshots } from "../drizzle/schema";
+import { activityLogs, adviceSteps, alerts, authCredentials, centerStaff, citizenIdDocuments, evidenceFiles, evacuationCenters, invitations, evacuees, InsertUser, resources, resourceTransactions, responderActions, reportExports, riskReports, roleChangeRequests, safetyAdvice, systemSettings, users, weatherSnapshots } from "../drizzle/schema";
 import { getResourceStatus, resolveNotificationDelivery } from "../shared/operations";
 import { adviceImageMaxBytes, isAllowedAdviceImageMimeType, normalizeAdviceSteps, uniqueAdviceSlug, type AdviceStatus } from "../shared/advice";
+import { computeIdPurgeDate } from "../shared/idVerification";
 import { ENV } from "./_core/env";
 import { storagePut } from "./storage";
 import { broadcastAlert } from "./_core/realtime";
@@ -337,4 +338,310 @@ export async function uploadAdviceStepImage(input: {
     throw new Error("Step photo exceeds the 5MB limit");
   const stored = await storagePut(`safety-advice/${cleanName}`, bytes, input.mimeType);
   return { url: stored.url, key: stored.key, sizeBytes: bytes.byteLength };
+}
+
+// ---------------------------------------------------------------------------
+// Citizen ID documents (US-2 / US-3)
+//
+// Worth knowing before changing anything in this section:
+//
+//  - Nothing here returns a publicly fetchable URL. `storagePut` yields a
+//    `/manus-storage/{key}` proxy path, which is acceptable for advice step
+//    photos but not for a government ID belonging to a named resident. Callers
+//    get a `fileKey` and the router serves it through an authenticated, audited
+//    route instead.
+//  - `purgeAfter` is written at insert and update time so the retention job is
+//    a single indexed scan rather than a date calculation per row.
+//  - The retention rule itself lives in shared/idVerification.ts, so it is
+//    testable without a database.
+// ---------------------------------------------------------------------------
+
+/** A staff member's first assigned centre, or null when they have none. */
+export async function getPrimaryCenterIdForUser(userId: number): Promise<number | null> {
+  const ids = await listAssignedCenterIds(userId);
+  return ids[0] ?? null;
+}
+
+export async function createCitizenIdDocument(input: {
+  userId: number;
+  fileKey: string;
+  fileName?: string | null;
+  mimeType: string;
+  sizeBytes?: number | null;
+  centerId?: number | null;
+  supersedesId?: number | null;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+
+  // An upload nobody reviews is treated as abandoned, so the purge date is set
+  // at insert rather than waiting for a review that may never happen.
+  const purgeAfter = computeIdPurgeDate({ status: "PENDING", uploadedAt: new Date() });
+  const [created] = await db
+    .insert(citizenIdDocuments)
+    .values({
+      userId: input.userId,
+      fileKey: input.fileKey,
+      fileName: input.fileName ?? null,
+      mimeType: input.mimeType,
+      sizeBytes: input.sizeBytes ?? null,
+      centerId: input.centerId ?? null,
+      supersedesId: input.supersedesId ?? null,
+      status: "PENDING",
+      purgeAfter,
+    })
+    .$returningId();
+  return created.id;
+}
+
+export async function getIdDocumentById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(citizenIdDocuments).where(eq(citizenIdDocuments.id, id)).limit(1);
+  return rows[0];
+}
+
+/** An applicant's most recent unreviewed, unpurged document. */
+/**
+ * An applicant's most recent decided document, whatever the outcome. Used when
+ * they resubmit after a decline, so the new upload can point back at what it
+ * replaces and the earlier record stays on file until its own purge date.
+ */
+export async function getLatestIdDocumentForUser(userId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(citizenIdDocuments)
+    .where(eq(citizenIdDocuments.userId, userId))
+    .orderBy(desc(citizenIdDocuments.createdAt))
+    .limit(1);
+  return rows[0];
+}
+
+export async function getPendingIdDocumentForUser(userId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(citizenIdDocuments)
+    .where(
+      and(
+        eq(citizenIdDocuments.userId, userId),
+        eq(citizenIdDocuments.status, "PENDING"),
+        isNull(citizenIdDocuments.purgedAt),
+      ),
+    )
+    .orderBy(desc(citizenIdDocuments.createdAt))
+    .limit(1);
+  return rows[0];
+}
+
+/**
+ * The review queue. Admins see every applicant; centre staff see only those
+ * assigned to their own centres (sub-decision 5.2(b)).
+ */
+export async function listIdDocumentsForReview(options: { status?: string; centerIds?: number[] } = {}) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const conditions = [];
+  if (options.status) conditions.push(eq(citizenIdDocuments.status, options.status as "PENDING"));
+  if (options.centerIds) {
+    // Staff with no centre assigned get nothing. Returning unfiltered here
+    // would hand them every applicant's ID.
+    if (options.centerIds.length === 0) return [];
+    conditions.push(inArray(citizenIdDocuments.centerId, options.centerIds));
+  }
+
+  return db
+    .select({
+      id: citizenIdDocuments.id,
+      userId: citizenIdDocuments.userId,
+      fileKey: citizenIdDocuments.fileKey,
+      fileName: citizenIdDocuments.fileName,
+      mimeType: citizenIdDocuments.mimeType,
+      sizeBytes: citizenIdDocuments.sizeBytes,
+      idType: citizenIdDocuments.idType,
+      idNumberMasked: citizenIdDocuments.idNumberMasked,
+      addressOnId: citizenIdDocuments.addressOnId,
+      status: citizenIdDocuments.status,
+      reviewedAt: citizenIdDocuments.reviewedAt,
+      rejectionReason: citizenIdDocuments.rejectionReason,
+      rejectionNote: citizenIdDocuments.rejectionNote,
+      centerId: citizenIdDocuments.centerId,
+      purgeAfter: citizenIdDocuments.purgeAfter,
+      createdAt: citizenIdDocuments.createdAt,
+      applicantName: users.name,
+      applicantFirstName: users.firstName,
+      applicantLastName: users.lastName,
+      applicantEmail: users.email,
+      applicantPhone: users.phone,
+      declaredAddress: users.address,
+      applicantAge: users.age,
+      applicantStatus: users.accountStatus,
+    })
+    .from(citizenIdDocuments)
+    .innerJoin(users, eq(users.id, citizenIdDocuments.userId))
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(citizenIdDocuments.createdAt));
+}
+
+/**
+ * Records a review decision and moves the applicant's account status with it.
+ *
+ * One transaction on purpose: an approved account whose ID record still reads
+ * PENDING, or the reverse, would be indefensible during an audit.
+ */
+export async function reviewIdDocument(input: {
+  documentId: number;
+  reviewerId: number;
+  decision: "APPROVED" | "REJECTED";
+  idType?: string | null;
+  idNumberMasked?: string | null;
+  addressOnId?: string | null;
+  rejectionReason?: string | null;
+  rejectionNote?: string | null;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+
+  return db.transaction(async tx => {
+    const existing = await tx
+      .select()
+      .from(citizenIdDocuments)
+      .where(eq(citizenIdDocuments.id, input.documentId))
+      .limit(1);
+    const document = existing[0];
+    if (!document) throw new Error("That ID document no longer exists.");
+    if (document.purgedAt) throw new Error("That ID image has already been deleted.");
+    if (document.status !== "PENDING") throw new Error("This application has already been reviewed.");
+
+    const reviewedAt = new Date();
+    await tx
+      .update(citizenIdDocuments)
+      .set({
+        status: input.decision,
+        reviewedBy: input.reviewerId,
+        reviewedAt,
+        idType: input.idType ?? null,
+        idNumberMasked: input.idNumberMasked ?? null,
+        addressOnId: input.addressOnId ?? null,
+        rejectionReason: input.decision === "REJECTED" ? input.rejectionReason ?? null : null,
+        rejectionNote: input.decision === "REJECTED" ? input.rejectionNote ?? null : null,
+        // Null for an approval, and that null is deliberate: the ID is kept
+        // while the account stays active, and the year is only counted once
+        // users.deactivatedAt is set. See computeIdPurgeDate and
+        // refreshApprovedIdPurgeDates.
+        purgeAfter: computeIdPurgeDate({ status: input.decision, reviewedAt }),
+      })
+      .where(eq(citizenIdDocuments.id, input.documentId));
+
+    // Only citizen accounts are moved. The existing updateUserApproval flow
+    // carries the same guard; repeating it here keeps the two paths from
+    // drifting apart.
+    const applicant = await tx
+      .select({ id: users.id, role: users.role })
+      .from(users)
+      .where(eq(users.id, document.userId))
+      .limit(1);
+    if (applicant[0]?.role === "citizen") {
+      await tx
+        .update(users)
+        .set({ accountStatus: input.decision })
+        .where(eq(users.id, document.userId));
+    }
+
+    return { userId: document.userId, reviewedAt };
+  });
+}
+
+/**
+ * Admin-only per sub-decision 5.2(c). Removes the record entirely; the caller
+ * is responsible for deleting the underlying file from storage.
+ */
+export async function deleteIdDocument(id: number, actorId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const rows = await db.select().from(citizenIdDocuments).where(eq(citizenIdDocuments.id, id)).limit(1);
+  const document = rows[0];
+  if (!document) throw new Error("That ID document no longer exists.");
+  if (document.purgedAt) return { alreadyPurged: true, fileKey: document.fileKey };
+
+  await db.delete(citizenIdDocuments).where(eq(citizenIdDocuments.id, id));
+  await logActivity({
+    actorId,
+    action: "id_document.delete",
+    entityType: "citizen_id_document",
+    entityId: id,
+    metadata: `Deleted the ID record for applicant ${document.userId}`,
+  });
+  return { alreadyPurged: false, fileKey: document.fileKey };
+}
+
+/**
+ * Retention job (OQ 3). Returns the file keys needing removal from storage and
+ * stamps `purgedAt`, so a record of what was deleted and when survives. The S3
+ * delete itself belongs to the caller, since storage access lives in the router.
+ */
+export async function purgeExpiredIdDocuments(now = new Date()) {
+  const db = await getDb();
+  if (!db) return { keys: [] as string[], purged: 0 };
+
+  const rows = await db
+    .select({ id: citizenIdDocuments.id, fileKey: citizenIdDocuments.fileKey })
+    .from(citizenIdDocuments)
+    .where(and(lte(citizenIdDocuments.purgeAfter, now), isNull(citizenIdDocuments.purgedAt)))
+    .limit(500);
+
+  if (rows.length === 0) return { keys: [], purged: 0 };
+
+  await db
+    .update(citizenIdDocuments)
+    .set({ purgedAt: now })
+    .where(inArray(citizenIdDocuments.id, rows.map(row => row.id)));
+
+  return { keys: rows.map(row => row.fileKey), purged: rows.length };
+}
+
+/**
+ * Starts the retention clock for approved IDs whose accounts have since been
+ * deactivated (OQ 3).
+ *
+ * Only rows with a null purgeAfter are touched, which is exactly the set of
+ * approved IDs that have never been scheduled for deletion because the account
+ * was still active. When the account deactivates, the year is counted from that
+ * moment rather than from the approval, so a long-standing resident's ID is not
+ * deleted the year after they registered.
+ */
+export async function refreshApprovedIdPurgeDates() {
+  const db = await getDb();
+  if (!db) return 0;
+
+  const rows = await db
+    .select({ id: citizenIdDocuments.id, deactivatedAt: users.deactivatedAt })
+    .from(citizenIdDocuments)
+    .innerJoin(users, eq(users.id, citizenIdDocuments.userId))
+    .where(
+      and(
+        eq(citizenIdDocuments.status, "APPROVED"),
+        isNull(citizenIdDocuments.purgedAt),
+        isNull(citizenIdDocuments.purgeAfter),
+        isNotNull(users.deactivatedAt),
+      ),
+    )
+    .limit(500);
+
+  for (const row of rows) {
+    await db
+      .update(citizenIdDocuments)
+      .set({
+        purgeAfter: computeIdPurgeDate({
+          status: "APPROVED",
+          accountDeactivatedAt: row.deactivatedAt,
+        }),
+      })
+      .where(eq(citizenIdDocuments.id, row.id));
+  }
+  return rows.length;
 }

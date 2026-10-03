@@ -20,6 +20,12 @@ import {
   getRoleFromSearch,
   roleBrands,
 } from "../../../shared/roles";
+import {
+  checkIdFileSize,
+  formatBytes,
+  ID_MAX_BYTES,
+  isAllowedIdMimeType,
+} from "../../../shared/idVerification";
 
 type RegistrationRole = "admin" | "staff" | "responder" | "citizen";
 const roles: Array<{
@@ -88,6 +94,13 @@ export default function AccountRegister({
   const [approvalToken, setApprovalToken] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [notice, setNotice] = useState("");
+  const [validId, setValidId] = useState<{
+    fileName: string;
+    mimeType: string;
+    dataBase64: string;
+    sizeBytes: number;
+  } | null>(null);
+  const [validIdError, setValidIdError] = useState("");
   const selected = roles.find(item => item.value === role) ?? roles[3];
   const register = trpc.localAuth.register.useMutation({
     onSuccess: result => {
@@ -116,6 +129,53 @@ export default function AccountRegister({
   const isGmailEmail = /^[^\s@]+@gmail\.com$/i.test(email.trim());
   const hasPhone = phone.trim().length > 0;
   const isPhoneValid = /^09\d{9}$/.test(phone.trim());
+
+  /**
+   * Reads the chosen ID and validates it against the same rules the server
+   * applies, so an obviously wrong file is refused before it is uploaded rather
+   * than after. OQ 2 accepts any valid ID type, so this checks the container
+   * format only, never the kind of document.
+   */
+  function handleValidIdChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    setValidIdError("");
+    if (!file) {
+      setValidId(null);
+      return;
+    }
+    if (!isAllowedIdMimeType(file.type)) {
+      setValidId(null);
+      setValidIdError("An ID must be a JPEG, PNG, WebP or PDF file.");
+      return;
+    }
+    if (!checkIdFileSize(file.size).ok) {
+      setValidId(null);
+      setValidIdError(
+        `That file is ${formatBytes(file.size)}. The maximum is ${formatBytes(ID_MAX_BYTES)}.`,
+      );
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => {
+      setValidId(null);
+      setValidIdError("That file could not be read. Try selecting it again.");
+    };
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      if (!result) {
+        setValidId(null);
+        setValidIdError("That file could not be read. Try selecting it again.");
+        return;
+      }
+      setValidId({
+        fileName: file.name,
+        mimeType: file.type,
+        dataBase64: result,
+        sizeBytes: file.size,
+      });
+    };
+    reader.readAsDataURL(file);
+  }
 
   useEffect(() => {
     if (approvalStatus.data?.accountStatus === "APPROVED" && !approvalAccepted && !completeApproval.isPending) {
@@ -157,6 +217,17 @@ export default function AccountRegister({
       email,
       password,
       role,
+      // Sent with the registration rather than after sign-in, because an
+      // unapproved citizen cannot sign in and residency review is what approval
+      // means. Optional: a registration without an ID is still accepted and is
+      // approved on judgement rather than on document evidence.
+      validId: validId
+        ? {
+            fileName: validId.fileName,
+            mimeType: validId.mimeType,
+            dataBase64: validId.dataBase64,
+          }
+        : null,
     });
   }
 
@@ -431,6 +502,41 @@ export default function AccountRegister({
               !
             </span>
             <span>{notice || register.error?.message}</span>
+          </div>
+        )}
+        {isCitizenRegistration && (
+          <div className="registration-id-field">
+            <label htmlFor="registration-valid-id">Valid ID</label>
+            <input
+              id="registration-valid-id"
+              className="registration-id-input"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,application/pdf"
+              onChange={handleValidIdChange}
+              aria-describedby="registration-valid-id-help"
+              aria-invalid={validIdError ? true : undefined}
+            />
+            <small id="registration-valid-id-help">
+              Any valid ID is accepted — a PhilSys ID, a Barangay ID, a driver&apos;s
+              licence, or a clear photo of one. Your address on the ID is what proves
+              you live in Pateros. Optional, but without it your account is approved
+              by an officer&apos;s judgement rather than from a document.
+            </small>
+            {validId && (
+              <span className="registration-id-chosen" role="status">
+                <CheckCircle2 size={15} aria-hidden="true" /> {validId.fileName} (
+                {formatBytes(validId.sizeBytes)})
+              </span>
+            )}
+            {validIdError && (
+              <span className="registration-id-error" role="alert">
+                {validIdError}
+              </span>
+            )}
+            <small className="registration-id-privacy">
+              Reviewed only by authorised staff, never shown publicly, and deleted
+              automatically once it is no longer needed.
+            </small>
           </div>
         )}
         {isCitizenRegistration ? (

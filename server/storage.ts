@@ -95,3 +95,29 @@ export async function storageGetSignedUrl(relKey: string): Promise<string> {
   const { url } = (await resp.json()) as { url: string };
   return url;
 }
+
+/**
+ * Removes an object. Used by the ID retention job (OQ 3).
+ *
+ * Treats a 404 as success: the retention job is trying to make a file absent,
+ * and a file that is already gone satisfies that. Propagating a 404 would make
+ * the job fail on records it had in fact already cleaned up, and would leave
+ * `purgedAt` unset for no reason.
+ */
+export async function storageDelete(relKey: string): Promise<void> {
+  const { forgeUrl, forgeKey } = getForgeConfig();
+  const key = normalizeKey(relKey);
+
+  const delUrl = new URL("v1/storage/delete", forgeUrl + "/");
+  delUrl.searchParams.set("path", key);
+
+  const resp = await fetch(delUrl, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${forgeKey}` },
+  });
+
+  if (resp.ok || resp.status === 404) return;
+
+  const msg = await resp.text().catch(() => resp.statusText);
+  throw new Error(`Storage delete failed (${resp.status}): ${msg}`);
+}

@@ -27,6 +27,7 @@ import {
   confirmTwoFactorSetup,
   countActiveAdmins,
   createAlert,
+  createCitizenIdDocument,
   createInvitation,
   createResponderAction,
   createResource,
@@ -42,6 +43,10 @@ import {
   getResourceById,
   getRiskReportById,
   getRoleChangeRequest,
+  getIdDocumentById,
+  getLatestIdDocumentForUser,
+  getPendingIdDocumentForUser,
+  refreshApprovedIdPurgeDates,
   getSafetyAdviceById,
   getSafetyAdviceBySlug,
   getSettings,
@@ -58,6 +63,7 @@ import {
   listDemoAccounts,
   listEvacuees,
   listEvacueesForCenters,
+  listIdDocumentsForReview,
   listInvitations,
   listPublishedAdviceWithSteps,
   listResources,
@@ -76,6 +82,9 @@ import {
   queueReportExport,
   registerEvacuee,
   registerLocalUser,
+  reviewIdDocument,
+  deleteIdDocument,
+  purgeExpiredIdDocuments,
   updateUserApproval,
   releaseEvacuee,
   removeResource,
@@ -105,6 +114,17 @@ import {
   isAdviceDraftPublishable,
   validateAdviceDraft,
 } from "../shared/advice";
+import {
+  checkIdFileSize,
+  evaluatePaterosResidency,
+  idDocumentTypes,
+  idRejectionReasons,
+  isAllowedIdMimeType,
+  isIdDocumentType,
+  isIdRejectionReason,
+  maskIdNumber,
+} from "../shared/idVerification";
+import { storageDelete, storageGetSignedUrl, storagePut } from "./storage";
 
 const allowedRoles = [
   "admin",
@@ -235,8 +255,345 @@ async function issueLocalSession(
   return { user: publicUser(user), requiresTwoFactor: false as const };
 }
 
+const idDocumentTypeValues = Object.keys(idDocumentTypes) as [
+  (keyof typeof idDocumentTypes),
+  ...(keyof typeof idDocumentTypes)[],
+];
+const idRejectionReasonValues = Object.keys(idRejectionReasons) as [
+  (keyof typeof idRejectionReasons),
+  ...(keyof typeof idRejectionReasons)[],
+];
+
+/** A Valid ID as it arrives from the browser. Shared by registration and resubmission. */
+const uploadedIdShape = z.object({
+  fileName: z.string().min(1).max(255),
+  mimeType: z.string().min(1).max(120),
+  dataBase64: z.string().min(1),
+});
+
+/**
+ * Validates and stores an uploaded ID, then records it against a user.
+ *
+ * Called from two places: the citizen's own registration, where there is no
+ * session yet because an unapproved citizen cannot sign in, and the resubmission
+ * route for a declined ID (US-4).
+ *
+ * The file is written to storage before the database row and removed again if
+ * the row cannot be created. Storing afterwards would leak an orphan object in
+ * the bucket on every failure, and orphans of government IDs are exactly what
+ * the retention rules exist to prevent.
+ */
+async function attachCitizenIdDocument(input: {
+  userId: number;
+  centerId: number | null;
+  supersedesId?: number | null;
+  upload: z.infer<typeof uploadedIdShape>;
+}) {
+  if (!isAllowedIdMimeType(input.upload.mimeType))
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "An ID must be a JPEG, PNG, WebP or PDF file.",
+    });
+
+  const bytes = Buffer.from(
+    input.upload.dataBase64.replace(/^data:[^;]+;base64,/, ""),
+    "base64",
+  );
+  const sizeCheck = checkIdFileSize(bytes.byteLength);
+  if (!sizeCheck.ok) throw new TRPCError({ code: "BAD_REQUEST", message: sizeCheck.message });
+
+  const cleanName = input.upload.fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+  // Namespaced by user id so one resident's documents are never mixed with
+  // another's in the bucket, and so a single resident's set is easy to find.
+  const stored = await storagePut(
+    `citizen-ids/${input.userId}/${cleanName}`,
+    bytes,
+    input.upload.mimeType,
+  );
+
+  try {
+    return await createCitizenIdDocument({
+      userId: input.userId,
+      fileKey: stored.key,
+      fileName: cleanName,
+      mimeType: input.upload.mimeType,
+      sizeBytes: bytes.byteLength,
+      centerId: input.centerId,
+      supersedesId: input.supersedesId ?? null,
+    });
+  } catch (error) {
+    await storageDelete(stored.key).catch(() => {
+      console.warn("[ID upload] orphan cleanup failed for", stored.key);
+    });
+    throw error;
+  }
+}
+
 export const appRouter = router({
   system: systemRouter,
+  /**
+   * Citizen Valid ID verification (US-2 / US-3).
+   *
+   * Read access follows OQ 7 and the accepted sub-decisions:
+   *   - admins and centre staff may view, approve and decline
+   *   - only admins may delete, because deletion is irreversible
+   *   - citizens reach only their own status and their own upload
+   *
+   * `imageUrl` is the only way an ID file leaves the server. It mints a
+   * short-lived signed URL after an authorization check and writes an audit
+   * entry, because `storagePut`'s own `/manus-storage/{key}` path is a public
+   * proxy and must never be used for a government ID.
+   */
+  idVerification: router({
+    /**
+     * The applicant's own current state. Safe for a pending citizen to call: it
+     * reports only their own document's status and reason, never the file and
+     * never the address read off it.
+     */
+    myStatus: protectedProcedure.query(async ({ ctx }) => {
+      const pending = await getPendingIdDocumentForUser(ctx.user.id);
+      if (pending)
+        return {
+          hasDocument: true as const,
+          status: pending.status,
+          createdAt: pending.createdAt,
+          purgeAfter: pending.purgeAfter,
+          fileName: pending.fileName,
+          mimeType: pending.mimeType,
+          // Deliberately absent: fileKey, addressOnId, idNumberMasked.
+        };
+
+      const latest = await getLatestIdDocumentForUser(ctx.user.id);
+      const user = await getUserById(ctx.user.id);
+      return {
+        hasDocument: false as const,
+        status: latest?.status ?? null,
+        rejectionReason: latest?.rejectionReason ?? null,
+        rejectionNote: latest?.rejectionNote ?? null,
+        reviewedAt: latest?.reviewedAt ?? null,
+        accountStatus: user?.accountStatus ?? null,
+      };
+    }),
+
+    /**
+     * Uploads an ID for the signed-in citizen. This is the resubmission path
+     * (US-4) for someone whose ID was declined.
+     *
+     * Scoped to `ctx.user.id` with no userId in the input: a citizen must not be
+     * able to attach a document to somebody else's application by changing a
+     * number in the request.
+     */
+    upload: protectedProcedure.input(uploadedIdShape).mutation(async ({ ctx, input }) => {
+      if (ctx.user.role !== "citizen")
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only citizen accounts submit a Valid ID.",
+        });
+
+      // One unreviewed upload at a time. A second would otherwise sit in the
+      // queue ahead of the first and leave the reviewer choosing between two
+      // documents the applicant may not know differ.
+      const existing = await getPendingIdDocumentForUser(ctx.user.id);
+      if (existing)
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "You already have an ID awaiting review.",
+        });
+
+      const latest = await getLatestIdDocumentForUser(ctx.user.id);
+      const documentId = await attachCitizenIdDocument({
+        userId: ctx.user.id,
+        centerId: null,
+        supersedesId: latest && latest.status === "REJECTED" ? latest.id : null,
+        upload: input,
+      });
+
+      await logActivity({
+        actorId: ctx.user.id,
+        action: "ID_DOCUMENT_UPLOADED",
+        entityType: "citizen_id_document",
+        entityId: documentId,
+        metadata: JSON.stringify({ resubmission: Boolean(latest) }),
+      });
+
+      return { id: documentId };
+    }),
+
+    /**
+     * The review queue. Centre staff are scoped to their own centres, so a
+     * staff member never sees applicants assigned elsewhere (sub-decision 5.2(b)).
+     */
+    queue: roleProcedure(["admin", "staff"])
+      .input(
+        z
+          .object({ status: z.enum(["PENDING", "APPROVED", "REJECTED"]).default("PENDING") })
+          .nullish(),
+      )
+      .query(async ({ ctx, input }) => {
+        const centerIds =
+          ctx.user.role === "admin" ? undefined : await listAssignedCenterIds(ctx.user.id);
+        const rows = await listIdDocumentsForReview({
+          status: input?.status ?? "PENDING",
+          centerIds,
+        });
+
+        // Each row carries an advisory read of the address so staff need not
+        // retype it to compare against the Pateros barangays. It advises; it
+        // does not decide, because OQ 2 verifies no ID type and staff judgement
+        // is the only control.
+        return rows.map(row => ({ ...row, residency: evaluatePaterosResidency(row.addressOnId) }));
+      }),
+
+    /**
+     * Mints a short-lived URL for one ID image after checking the caller may see
+     * it, and records the view. This is the only path by which an ID file ever
+     * reaches anyone.
+     */
+    imageUrl: roleProcedure(["admin", "staff"])
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const document = await getIdDocumentById(input.id);
+        if (!document)
+          throw new TRPCError({ code: "NOT_FOUND", message: "That ID document no longer exists." });
+        if (document.purgedAt)
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "That ID image was deleted under the retention policy.",
+          });
+
+        // Centre scoping is enforced per document, not only in the queue query,
+        // so a crafted request for a known id cannot walk around it.
+        if (ctx.user.role === "staff") {
+          const centerIds = await listAssignedCenterIds(ctx.user.id);
+          if (document.centerId === null || !centerIds.includes(document.centerId))
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "This applicant is not assigned to your centre.",
+            });
+        }
+
+        const url = await storageGetSignedUrl(document.fileKey);
+        await logActivity({
+          actorId: ctx.user.id,
+          action: "ID_DOCUMENT_VIEWED",
+          entityType: "citizen_id_document",
+          entityId: document.id,
+          metadata: JSON.stringify({ userId: document.userId }),
+        });
+        return { url, expiresInSeconds: 300 };
+      }),
+
+    /**
+     * Records an approve or decline. OQ 7 admits centre staff; per sub-decision
+     * 5.2(c) that right covers deciding only, never deleting.
+     */
+    review: roleProcedure(["admin", "staff"])
+      .input(
+        z.object({
+          documentId: z.number().int().positive(),
+          decision: z.enum(["APPROVED", "REJECTED"]),
+          idType: z.enum(idDocumentTypeValues).nullish(),
+          idNumber: z.string().max(60).nullish(),
+          addressOnId: z.string().max(300).nullish(),
+          rejectionReason: z.enum(idRejectionReasonValues).nullish(),
+          rejectionNote: z.string().max(500).nullish(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        if (input.decision === "REJECTED" && !input.rejectionReason)
+          throw new TRPCError({ code: "BAD_REQUEST", message: "A decline needs a reason." });
+        if (input.decision === "APPROVED" && !input.addressOnId?.trim())
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Record the address on the ID so the approval can be explained later.",
+          });
+
+        const existing = await getIdDocumentById(input.documentId);
+        if (!existing)
+          throw new TRPCError({ code: "NOT_FOUND", message: "That ID document no longer exists." });
+
+        if (ctx.user.role === "staff") {
+          const centerIds = await listAssignedCenterIds(ctx.user.id);
+          if (existing.centerId === null || !centerIds.includes(existing.centerId))
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "This applicant is not assigned to your centre.",
+            });
+        }
+
+        const result = await reviewIdDocument({
+          documentId: input.documentId,
+          reviewerId: ctx.user.id,
+          decision: input.decision,
+          idType: input.idType ?? null,
+          // Masked on the way in. The full number is never persisted, so it
+          // cannot resurface from a later query or an export.
+          idNumberMasked: maskIdNumber(input.idNumber) || null,
+          addressOnId: input.addressOnId?.trim() || null,
+          rejectionReason: input.rejectionReason ?? null,
+          rejectionNote: input.rejectionNote?.trim() || null,
+        });
+
+        await logActivity({
+          actorId: ctx.user.id,
+          action: input.decision === "APPROVED" ? "ID_DOCUMENT_APPROVED" : "ID_DOCUMENT_REJECTED",
+          entityType: "citizen_id_document",
+          entityId: input.documentId,
+          metadata: JSON.stringify({
+            userId: result.userId,
+            idType: input.idType ?? null,
+            rejectionReason: input.rejectionReason ?? null,
+          }),
+        });
+
+        return {
+          userId: result.userId,
+          accountStatus: input.decision,
+          reviewedAt: result.reviewedAt,
+        };
+      }),
+
+    /** Admin only (sub-decision 5.2(c)). Removes both the record and the file. */
+    remove: adminProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const result = await deleteIdDocument(input.id, ctx.user.id);
+        if (!result.alreadyPurged) {
+          await storageDelete(result.fileKey).catch(error => {
+            // The record is already gone; a leftover object is an operational
+            // problem to reconcile, not a reason to fail the caller's request.
+            console.warn("[ID retention] file delete failed for", result.fileKey, error);
+          });
+        }
+        return { removed: true as const, alreadyPurged: result.alreadyPurged };
+      }),
+
+    /**
+     * Retention sweep (OQ 3). Admin-triggered rather than left on a timer, so
+     * there is no unattended job holding credentials and every purge is
+     * auditable.
+     *
+     * The refresh runs first: an account that has since deactivated starts its
+     * one-year clock now, before the sweep decides what is already due.
+     */
+    purgeExpired: adminProcedure.mutation(async ({ ctx }) => {
+      const scheduled = await refreshApprovedIdPurgeDates();
+      const result = await purgeExpiredIdDocuments();
+      for (const key of result.keys) {
+        await storageDelete(key).catch(error =>
+          console.warn("[ID retention] file delete failed for", key, error),
+        );
+      }
+      await logActivity({
+        actorId: ctx.user.id,
+        action: "ID_DOCUMENTS_PURGED",
+        entityType: "citizen_id_document",
+        entityId: null,
+        metadata: JSON.stringify({ purged: result.purged, newlyScheduled: scheduled }),
+      });
+      return { purged: result.purged, newlyScheduled: scheduled };
+    }),
+  }),
   auth: router({
     me: publicProcedure.query(({ ctx }) => {
       const user = ctx.user;
@@ -287,6 +644,13 @@ export const appRouter = router({
           role: z
             .enum(["admin", "staff", "responder", "citizen"])
             .default("citizen"),
+          // Optional rather than required. OQ 2 accepts every valid ID type and
+          // OQ 1 proves residency from it, so an ID is the primary evidence a
+          // reviewer has, but making it mandatory at this stage would lock out
+          // anyone whose only document is a phone photo of a barangay clearance
+          // they have not yet collected. A registration without one is approved
+          // on judgement, and flagged as having no ID on file.
+          validId: uploadedIdShape.nullish(),
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -311,13 +675,34 @@ export const appRouter = router({
             .join(" "),
           role: input.role,
         });
+
+        // The ID is attached here rather than after sign-in because a citizen
+        // cannot sign in until an administrator approves them, and residency
+        // review is what approval means. Validated and stored before the user
+        // row is created, so a malformed upload fails registration outright
+        // instead of leaving an account that can never be approved.
+        let idDocumentId: number | null = null;
+        if (input.validId) {
+          idDocumentId = await attachCitizenIdDocument({
+            userId: user.userId,
+            centerId: null,
+            upload: input.validId,
+          });
+          await logActivity({
+            actorId: null,
+            action: "ID_DOCUMENT_UPLOADED",
+            entityType: "citizen_id_document",
+            entityId: idDocumentId,
+            metadata: JSON.stringify({ userId: user.userId, via: "registration" }),
+          });
+        }
         const approvalToken = await new SignJWT({ type: "citizen-approval" })
           .setProtectedHeader({ alg: "HS256" })
           .setSubject(String(user.userId))
           .setIssuedAt()
           .setExpirationTime("1d")
           .sign(sessionKey());
-        return { approvalRequired: true as const, email: user.email, approvalToken };
+        return { approvalRequired: true as const, email: user.email, approvalToken, idDocumentId };
       }),
     checkApproval: publicProcedure
       .input(z.object({ token: z.string().min(20) }))

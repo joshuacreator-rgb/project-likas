@@ -76,6 +76,7 @@ import type { RealtimeStreamPayload } from "../../../shared/citizen";
 import { toast } from "sonner";
 import CitizenHome from "./CitizenHome";
 import RoleOnboarding from "@/components/RoleOnboarding";
+import IdVerificationWorkspace from "@/components/IdVerificationWorkspace";
 import {
   Bar,
   BarChart,
@@ -593,6 +594,7 @@ export default function Home() {
         { label: "Risk reports", icon: AlertTriangle },
         { label: "Alerts", icon: Bell },
         { label: "Safety advice", icon: LifeBuoy },
+        { label: "ID verification", icon: ShieldCheck },
         { label: "User & roles", icon: UserCog },
       ]
     : user?.role === "responder"
@@ -610,6 +612,7 @@ export default function Home() {
             { label: "Evacuees", icon: Users },
             { label: "Resources", icon: Package },
             { label: "Alerts", icon: Bell },
+            { label: "ID verification", icon: ShieldCheck },
           ]
       : [
           { label: "Overview", icon: LayoutDashboard },
@@ -2369,6 +2372,9 @@ function WorkspaceView({
         </div>
       </section>
     );
+  if (active === "ID verification") {
+    return <IdVerificationWorkspace role={user?.role ?? "citizen"} />;
+  }
   if (active === "User & roles") {
     const users = managedUsers?.length
       ? managedUsers
