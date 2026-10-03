@@ -11,7 +11,7 @@
  */
 
 import { getDb, logActivity } from "./db";
-import { adviceCategories, normalizeAdviceSteps, uniqueAdviceSlug, type AdviceStepRecord } from "../shared/advice";
+import { adviceCategories, normalizeAdviceSteps, slugifyAdviceTitle, uniqueAdviceSlug, type AdviceStepRecord } from "../shared/advice";
 import { adviceSteps, safetyAdvice } from "../drizzle/schema";
 
 const PLACEHOLDER_BANNER =
@@ -164,11 +164,15 @@ async function main() {
   let created = 0;
   let skipped = 0;
   for (const item of seedAdvice) {
-    const slug = uniqueAdviceSlug(item.slugBase, knownSlugs);
-    if (existingSlugs.has(slug)) {
+    // Test the base slug, not the generated one: uniqueAdviceSlug always invents
+    // a fresh slug when the base is taken, so checking its output would never
+    // match and a re-run would duplicate every item with a -2 suffix.
+    const baseSlug = slugifyAdviceTitle(item.slugBase);
+    if (existingSlugs.has(baseSlug)) {
       skipped += 1;
       continue;
     }
+    const slug = uniqueAdviceSlug(baseSlug, knownSlugs);
     const [row] = await db
       .insert(safetyAdvice)
       .values({
