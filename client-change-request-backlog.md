@@ -870,3 +870,23 @@ A Railway volume is now attached at `/data`. On startup the server warns loudly 
 | `server/id-verification-router.test.ts` | 18 |
 | `server/storage.test.ts` | 33 |
 | Full suite | 197 passing across 18 files |
+
+### Storage verification on live staging
+
+Every step below was exercised against the deployed service, not just locally. Two QA accounts were created for the run and both have been removed, along with their files and rows.
+
+| Check | Result |
+|---|---|
+| Railway volume attached | `/data`, `RAILWAY_VOLUME_MOUNT_PATH` injected and picked up automatically |
+| Register with a Valid ID | 200, `idDocumentId: 1`, `idUploadFailed: false` |
+| File on disk | `/data/uploads/citizen-ids/20/id_f2be769c.png`, 70 bytes — **on the volume, not the container filesystem** |
+| Review queue | Lists the pending document for an admin |
+| `imageUrl` then fetch | 200, 70 bytes, `Content-Disposition: attachment` |
+| Unsigned URL to the same file | 403 |
+| Path traversal with a forged signature | 403 |
+| Pending citizen signing in | 403 *"waiting for Administrator approval"* — confirms why the retry route is needed |
+| `uploadPendingId` with the approval token | 200, document created |
+| `uploadPendingId` with a forged token | 401 |
+| Cleanup | 0 QA accounts, 0 documents, 0 orphan credentials |
+
+Two PENDING citizens already exist in staging from manual testing (`test1234@gmail.com`, `test1235@gmail.com`) with **no ID document on file**. They are live examples of the trap in note 11 and cannot sign in. They should be deleted or resolved before the client demo.
