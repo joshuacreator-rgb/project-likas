@@ -1934,8 +1934,8 @@ function WorkspaceView({
   >("ALL");
   const [demoSearch, setDemoSearch] = useState("");
   const allowedWorkspaces: Record<string, string[]> = {
-    admin: ["Evacuation centers", "Evacuees", "Resources", "Incident map", "Risk reports", "Alerts", "Safety advice", "Activity log", "Settings", "User & roles"],
-    staff: ["Overview", "Evacuation centers", "Evacuees", "Resources", "Alerts"],
+    admin: ["Evacuation centers", "Evacuees", "Resources", "Incident map", "Risk reports", "Alerts", "Safety advice", "ID verification", "Activity log", "Settings", "User & roles"],
+    staff: ["Overview", "Evacuation centers", "Evacuees", "Resources", "Alerts", "ID verification"],
     responder: ["Overview", "Incident map", "Risk reports", "Alerts", "Security"],
   };
   const inviteMutation = trpc.admin.createInvitation.useMutation({
@@ -2086,6 +2086,14 @@ function WorkspaceView({
     }
   }
   if (active === "Overview") return null;
+  // The ID verification workspace renders its own component and never reads the
+  // descriptor record, so return before the view is computed.
+  if (active === "ID verification") {
+    return <IdVerificationWorkspace role={user?.role ?? "citizen"} />;
+  }
+  // Fallback for any workspace with no descriptor entry. Must not be
+  // `data.Overview`: "Overview" returns early above and is not a key in `data`.
+  const EMPTY_VIEW = { eyebrow: "", title: "", description: "", columns: [], rows: [] };
   const data: Record<
     string,
     {
@@ -2179,6 +2187,14 @@ function WorkspaceView({
       columns: ["Guidance", "Hazard", "Steps", "Status"],
       rows: [],
     },
+    "ID verification": {
+      eyebrow: "RESIDENT VERIFICATION",
+      title: "ID verification",
+      description:
+        "Review submitted Valid IDs to confirm Pateros residency before an account is treated as verified.",
+      columns: [],
+      rows: [],
+    },
     "Activity log": {
       eyebrow: "AUDIT TRAIL",
       title: "Activity log",
@@ -2232,7 +2248,7 @@ function WorkspaceView({
       rows: [],
     },
   };
-  const view = data[active] ?? data.Overview;
+  const view = data[active] ?? EMPTY_VIEW;
   const normalizedSearch = search.trim().toLowerCase();
   const visibleCenterRows = (user?.role === "staff" ? centers?.filter(center => center.status !== "CLOSED") : centers)?.filter(center => !normalizedSearch || `${center.name} ${center.address} ${center.barangay} ${center.status}`.toLowerCase().includes(normalizedSearch));
   const visibleResourceRows = (resources ?? liveResources ?? []).filter(resource => !normalizedSearch || `${resource.name} ${resource.category} ${resource.status} ${resource.unit}`.toLowerCase().includes(normalizedSearch));
@@ -2372,9 +2388,6 @@ function WorkspaceView({
         </div>
       </section>
     );
-  if (active === "ID verification") {
-    return <IdVerificationWorkspace role={user?.role ?? "citizen"} />;
-  }
   if (active === "User & roles") {
     const users = managedUsers?.length
       ? managedUsers
