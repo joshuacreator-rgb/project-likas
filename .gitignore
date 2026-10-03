@@ -20,6 +20,16 @@ env/
 .env.local
 .env.staging
 .env.production
+# Any other env variant or backup. `.env.bak` was committed with a live
+# JWT_SECRET before these rules existed; `*.bak` and `.env*` close that off.
+.env*
+*.bak
+
+# Manus dev debug capture. The Vite plugin in vite.config.ts records browser
+# console output, full network request bodies and session replay to disk.
+# Those captures contain login POST bodies, so real credentials and email
+# addresses end up in them. Never commit.
+.manus-logs/
 
 # Database files (don't commit your local DB)
 instance/
