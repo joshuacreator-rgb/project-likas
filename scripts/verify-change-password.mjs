@@ -25,10 +25,16 @@ const stamp = Date.now().toString(36);
 // Registration is Gmail-only (OQ 4), enforced client-side with an inline hint.
 // This address is random and unreachable, so nothing can be delivered to it and
 // no real mailbox is involved. The account is deleted in the cleanup session.
-const EMAIL = `likas.uicheck.${stamp}@gmail.com`;
+let EMAIL = process.env.LIKAS_TEST_EMAIL ?? `likas.uicheck.${stamp}@gmail.com`;
+// When credentials are supplied, skip registration and sign straight in. A
+// self-registered citizen is created PENDING and login refuses PENDING, so the
+// signed-in half of this check needs an account promoted out of that state.
+const EXISTING = Boolean(process.env.LIKAS_TEST_EMAIL && process.env.LIKAS_TEST_PASSWORD);
 const FIRST_PASSWORD = `Check-${stamp}-alpha`;
 const SECOND_PASSWORD = `Check-${stamp}-bravo`;
 const WRONG_PASSWORD = `Wrong-${stamp}-charlie`;
+// The password the account has when the run starts, whichever way we got a session.
+const ORIGINAL_PASSWORD = EXISTING ? process.env.LIKAS_TEST_PASSWORD : FIRST_PASSWORD;
 
 const results = [];
 function record(name, ok, detail = "") {
@@ -81,7 +87,11 @@ try {
   console.log(`Throwaway account: ${EMAIL}\n`);
 
   // ---- 1. Register through the public UI -------------------------------------
-  console.log("Register a throwaway citizen account:");
+  console.log(
+    EXISTING
+      ? "Using the supplied APPROVED account, registration skipped:"
+      : "Register a throwaway citizen account:",
+  );
   let page = await newPage();
 
   // Assert on the API response, not on the absence of words in the page. An
@@ -98,66 +108,65 @@ try {
     }
   });
 
-  await page.goto(`${BASE_URL}/register`, { waitUntil: "networkidle2", timeout: 60000 });
+  if (!EXISTING) {
+    await page.goto(`${BASE_URL}/register`, { waitUntil: "networkidle2", timeout: 60000 });
 
-  await fill(page, 'input[autocomplete="given-name"]', "Uicheck");
-  await fill(page, 'input[autocomplete="family-name"]', "Resident");
-  await fill(page, 'input[autocomplete="street-address"]', "123 Test Street, Pateros");
-  await fill(page, 'input[autocomplete="off"]', "30");
-  await fill(page, 'input[autocomplete="tel-national"]', "09171234567");
-  await fill(page, 'input[autocomplete="email"]', EMAIL);
-  await fill(page, 'input[autocomplete="new-password"]', FIRST_PASSWORD);
+    await fill(page, 'input[autocomplete="given-name"]', "Uicheck");
+    await fill(page, 'input[autocomplete="family-name"]', "Resident");
+    await fill(page, 'input[autocomplete="street-address"]', "123 Test Street, Pateros");
+    await fill(page, 'input[autocomplete="off"]', "30");
+    await fill(page, 'input[autocomplete="tel-national"]', "09171234567");
+    await fill(page, 'input[autocomplete="email"]', EMAIL);
+    await fill(page, 'input[autocomplete="new-password"]', FIRST_PASSWORD);
 
-  await page.click('button[type="submit"]');
-  await new Promise(r => setTimeout(r, 5000));
+    await page.click('button[type="submit"]');
+    await new Promise(r => setTimeout(r, 5000));
 
-  // The register response carries no row id; it echoes the email and hands back
-  // an approval token. That echo is the proof the account was created.
-  record(
-    "register created the account",
-    registerResult?.email === EMAIL && typeof registerResult?.approvalToken === "string",
-    `email=${registerResult?.email} token=${registerResult?.approvalToken ? "yes" : "no"}`,
-  );
-  record(
-    "registration reports whether approval is required",
-    typeof registerResult?.approvalRequired === "boolean",
-    `approvalRequired=${registerResult?.approvalRequired}`,
-  );
-  record(
-    "registration did not require a Valid ID",
-    registerResult?.idDocumentId === null,
-    `idDocumentId=${JSON.stringify(registerResult?.idDocumentId)}`,
-  );
-
-  // A self-registered citizen is created PENDING and login refuses PENDING
-  // (routers.ts:884). Surfaced as a skip, not a silent pass.
-  if (registerResult?.approvalRequired) {
-    console.log(
-      `\n  SKIP: account is ${await page
-        .evaluate(() => document.body.innerText)
-        .then(t => (t.match(/waiting for approval|approval/i) ? "PENDING" : "unknown"))}` +
-        " and login refuses PENDING accounts, so no session can be created.",
+    // The register response carries no row id; it echoes the email and hands
+    // back an approval token. That echo is the proof the account was created.
+    record(
+      "register created the account",
+      registerResult?.email === EMAIL &&
+        typeof registerResult?.approvalToken === "string",
+      `email=${registerResult?.email} token=${registerResult?.approvalToken ? "yes" : "no"}`,
     );
-    console.log(
-      "  The change-password checks need an APPROVED account. Promote this one,",
+    record(
+      "registration reports whether approval is required",
+      typeof registerResult?.approvalRequired === "boolean",
+      `approvalRequired=${registerResult?.approvalRequired}`,
     );
-    console.log(`  then re-run: ${EMAIL}`);
-    record("signed in with the new account", false, "BLOCKED: account is PENDING");
-    await page.close();
-    console.log(`\nAccount to promote: ${EMAIL}`);
-    await browser.close();
-    rmSync(profile, { recursive: true, force: true });
-    process.exit(3);
+    record(
+      "registration did not require a Valid ID",
+      registerResult?.idDocumentId === null,
+      `idDocumentId=${JSON.stringify(registerResult?.idDocumentId)}`,
+    );
+
+    // A self-registered citizen is created PENDING and login refuses PENDING
+    // (routers.ts:884). Surfaced as a skip, not a silent pass.
+    if (registerResult?.approvalRequired) {
+      console.log(
+        "\n  SKIP: the account is PENDING and login refuses PENDING accounts, so no",
+      );
+      console.log("        session can be created. Promote it, then re-run with:");
+      console.log(
+        `        LIKAS_TEST_EMAIL=${EMAIL} LIKAS_TEST_PASSWORD=<its password> node scripts/verify-change-password.mjs`,
+      );
+      record("signed in", false, "BLOCKED: account is PENDING");
+      await page.close();
+      await browser.close();
+      rmSync(profile, { recursive: true, force: true });
+      process.exit(3);
+    }
   }
   await page.close();
 
   // ---- 2. Sign in ------------------------------------------------------------
   console.log("\nSign in:");
   page = await newPage();
-  await signIn(page, EMAIL, FIRST_PASSWORD);
+  await signIn(page, EMAIL, ORIGINAL_PASSWORD);
   text = await bodyText(page);
   const signedIn = !page.url().includes("/login");
-  record("signed in with the new account", signedIn, `url=${new URL(page.url()).pathname}`);
+  record("signed in", signedIn, `url=${new URL(page.url()).pathname}`);
   if (!signedIn) {
     console.log("\n    cannot continue without a session");
     console.log(`    page said: ${text.slice(0, 300).replace(/\n/g, " ")}`);
@@ -209,7 +218,7 @@ try {
 
   // ---- 5. Correct current password succeeds ----------------------------------
   console.log("\nCorrect current password:");
-  await fill(page, 'input[autocomplete="current-password"]', FIRST_PASSWORD);
+  await fill(page, 'input[autocomplete="current-password"]', ORIGINAL_PASSWORD);
   await page.evaluate(v => {
     const inputs = [...document.querySelectorAll('input[autocomplete="new-password"]')];
     const setter = Object.getOwnPropertyDescriptor(
@@ -245,7 +254,7 @@ try {
 
   console.log("\nSign in with the old password (must be refused):");
   page = await newPage();
-  await signIn(page, EMAIL, FIRST_PASSWORD);
+  await signIn(page, EMAIL, ORIGINAL_PASSWORD);
   const oldRefused = page.url().includes("/login");
   record("old password is refused", oldRefused, `url=${new URL(page.url()).pathname}`);
   if (!oldRefused) {

@@ -1133,6 +1133,7 @@ Verification created accounts through the public registration form. They are PEN
 | `likas.uicheck.mutknma9@gmail.com` | this session | yes |
 | `likas.uicheck.mutkr5bz@gmail.com` | this session | yes |
 | `likas.uicheck.mutkzh3s@gmail.com` | this session | yes |
+| `likas.uicheck.mutm165k@gmail.com` | this session | yes |
 
 All are unreachable random addresses at gmail.com, so no message can be delivered to a real mailbox and no resident or staff account is involved. They should all be deleted before any client demonstration. Deletion requires in-container database access, which is currently blocked - see 10.6.
 
@@ -1142,7 +1143,7 @@ All are unreachable random addresses at gmail.com, so no message can be delivere
 
 This blocks three queued items, all of which need in-container database access:
 
-1. Deleting the six test accounts in 10.5.
+1. Deleting the seven test accounts in 10.5.
 2. Running migrations inside the container as part of the deploy gate (9.4.3). The database host is unreachable from outside, so `drizzle-kit migrate` cannot run locally.
 3. Promoting one throwaway account to APPROVED so `verify-change-password.mjs` can finish verifying the change-password screen.
 
