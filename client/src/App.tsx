@@ -9,6 +9,7 @@ import { AdminLogin, CitizenLogin, InternalLogin } from "./pages/Login";
 import AccountRegister from "./pages/AccountRegister";
 import PasswordRecovery from "./pages/PasswordRecovery";
 import AcceptInvitation from "./pages/AcceptInvitation";
+import AccountSecurity from "./pages/AccountSecurity";
 import CitizenHome from "./pages/CitizenHome";
 
 function Router() {
@@ -22,6 +23,7 @@ function Router() {
       <Route path={"/register"} component={AccountRegister} />
       <Route path={"/recover"} component={PasswordRecovery} />
       <Route path={"/accept-invitation"} component={AcceptInvitation} />
+      <Route path="/account/security" component={AccountSecurity} />
       <Route path={"/admin"} component={Home} />
       <Route path={"/staff"} component={Home} />
       <Route path={"/responder"} component={Home} />

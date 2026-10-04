@@ -1001,13 +1001,45 @@ export const appRouter = router({
           newPassword: z.string().min(10),
         })
       )
-      .mutation(({ ctx, input }) =>
-        changeLocalPassword(
-          ctx.user.id,
-          input.currentPassword,
-          input.newPassword
-        )
-      ),
+      .mutation(async ({ ctx, input }) => {
+        if (input.currentPassword === input.newPassword) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Your new password must be different from your current password.",
+          });
+        }
+
+        // Bound attempts per user AND per IP. Without this, anyone holding a
+        // stolen session could grind the current password offline-rate-limit
+        // free, or simply lock the real owner out of their own account.
+        enforceRateLimit(
+          ctx.req,
+          `change-password:${ctx.user.id}`,
+          5,
+          60 * 60 * 1000
+        );
+        try {
+          return await changeLocalPassword(
+            ctx.user.id,
+            input.currentPassword,
+            input.newPassword
+          );
+        } catch (error) {
+          // A wrong current password is a failed authentication, not an
+          // internal fault. Surfacing it as INTERNAL_SERVER_ERROR would also
+          // expose whether the account exists to a caller probing the route.
+          if (
+            error instanceof Error &&
+            error.message === "Current password is incorrect"
+          ) {
+            throw new TRPCError({
+              code: "UNAUTHORIZED",
+              message: "Current password is incorrect.",
+            });
+          }
+          throw error;
+        }
+      }),
     acceptInvitation: publicProcedure
       .input(
         z.object({ token: z.string().min(20), password: z.string().min(10) })
