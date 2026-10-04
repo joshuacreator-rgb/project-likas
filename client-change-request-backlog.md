@@ -890,3 +890,160 @@ Every step below was exercised against the deployed service, not just locally. T
 | Cleanup | 0 QA accounts, 0 documents, 0 orphan credentials |
 
 Two PENDING citizens already exist in staging from manual testing (`test1234@gmail.com`, `test1235@gmail.com`) with **no ID document on file**. They are live examples of the trap in note 11 and cannot sign in. They should be deleted or resolved before the client demo.
+
+---
+
+## 9. Decision record - 2026-10-04
+
+Closed at commit `dfef7bb4` (tag `secrets-untracked-1`). This section records the credential exposure found while sweeping for committed secrets, and the three decisions to be taken with the client.
+
+### 9.1 Committed secrets in the public repository
+
+A sweep of every tracked file turned up **two** exposures, not one. Both were pushed to a public repository.
+
+| Path | Size | Contents | Status |
+|---|---|---|---|
+| `.env.bak` | small | A live `JWT_SECRET` (44 chars). `DATABASE_URL` was `127.0.0.1`, `root`, no password - harmless local dev only | Untracked, `dfef7bb4` |
+| `.manus-logs/networkRequests.log` | 867 KB | Captured browser traffic including **login POST bodies** | Untracked, `dfef7bb4` |
+| `.manus-logs/sessionReplay.log` | 746 KB | UI session replay; 0 password *values*, its 102 "password" hits are field labels | Untracked, `dfef7bb4` |
+| `.manus-logs/browserConsole.log` | 757 KB | Browser console output | Untracked, `dfef7bb4` |
+
+Severity of the log exposure: **one real 10-character password, submitted alongside 20 real email addresses.** Five accounts appear with it:
+
+| Account | Present in staging |
+|---|---|
+| `admin@likas.local` | No - client-side demo credential, never created server-side |
+| `staff@likas.local` | No - same |
+| `responder@likas.local` | No - same |
+| `citizen@likas.local` | No - same |
+| **`juswamacailao@gmail.com`** | **Yes - a real admin account** |
+
+The email and the password are both present, so this is directly actionable rather than theoretical. **Remediation outstanding, requires dashboard access:** change the password for `juswamacailao@gmail.com` and rotate `JWT_SECRET` in Railway.
+
+No `Authorization` header values and no `Set-Cookie` values were captured, so the exposure is one credential, not a session token.
+
+Root cause: `vite.config.ts` registers a debug collector that posts browser console output, network request bodies and session replay to `/.manus__/logs`, and the plugin writes them to disk. Nothing prevented the output from being committed.
+
+### 9.2 Hardcoded demo credentials - investigated and cleared
+
+The leaked 10-character password matches the length of the credentials in `client/src/lib/staticAuth.ts:5-8`, which is a **client-side authentication bypass on inspection**: `authenticateStaticAccount` grants `role: "admin"` from a string comparison with no server call.
+
+It is **not reachable in production.** Verified, not assumed:
+
+| Check | Result |
+|---|---|
+| `Login.tsx:88` gates the path | `if (!import.meta.env.DEV) return;` |
+| Authority of the static session | None - reads and writes `localStorage` demo data only (`Home.tsx:233`), never reaches the server |
+| Live production bundle, 359 KB fetched from staging | `Admin@12345`, `admin@likas.local`, `static-local`, `likas-static-user` all **absent** |
+
+Vite replaces `import.meta.env.DEV` with `false` and tree-shakes the module out of the production build.
+
+Residual risk is low but real: the fixed credentials remain readable in public git history, and the code is a latent bypass if the `DEV` guard is ever removed or a dev-mode build is shipped. Recommendation is to delete the fixed `staticRoleCredentials` block and keep only the sound server-side mechanism, `provisionDemoAccount` (`db.ts:43`), which issues `demo.<role>.<hex>@likas.training` with a random password, hashed at cost 12 and expiring.
+
+### 9.3 The three decisions to take with the client
+
+Nine open questions will not get answered. Grouped by what actually blocks:
+
+**Decision 1 - the schedule.** Ask for **two** dates, not one: which date must it be live, and which date is the demo. Plan against the earlier one. "By November" is a 3.5-week swing.
+
+Bundled with it: **who writes the advice content (OQ 6).** Ask for a named person and a date, not "we will assign someone." Offer to draft it: Wave 3's machinery is live, the wording is missing, and SME authoring is 1-2 weeks of elapsed time. We can produce reviewable English and Filipino drafts from official Philippine sources (PAGASA, NDRRMC, OCD) in 2 days, held in `DRAFT` until their office signs off. Their expert reviews and corrects wording; ours does not publish anything as authoritative.
+
+**Decision 2 - video in or out (US-6).** Recommendation is to cut it from this release. The caps are undefined - OQ 5 was answered *"kahit ilan second"*, which is not implementable - and it is the only Must item with a clean deferral. US-5 and US-7 photo evidence carries the evidentiary value. If a slot is held for video, we need length, size and file-count caps plus a date.
+
+The argument to make is a mission argument, not a technical one: a large video on congested mobile data during a typhoon is the case most likely to fail to upload, and a failed upload loses the evidence, which defeats the purpose of attaching evidence in an emergency.
+
+**Decision 3 - production readiness.** These must not be discovered late.
+
+- **OQ 13, storage.** Move to an S3-compatible bucket. The current arrangement stores resident files on the disk attached to the application service; for a disaster response app, the disaster can take out the data along with the service. RA 10173 also requires us to state where personal data physically sits. Needed from them: who owns and pays for the bucket, and which jurisdiction.
+- **OQ 12, residents with no ID.** See 9.4.1.
+- **BFP = `responder`, in writing.** Confirm whether BFP need to **approve** registrations and **view ID documents**, or only view reports. This is not a formality: the `responder` role is not currently in the ID-verification workspace allowlist, so BFP cannot open that screen today.
+
+### 9.4 Architecture of the resulting changes
+
+**9.4.1 PENDING limited access - resolves OQ 12 and the trap in note 11**
+
+Current behaviour is a dead end: registration succeeds, `login` refuses a `PENDING` citizen, `completeApproval` only issues a session once the account is `APPROVED`, and no document exists in the review queue.
+
+| Layer | Change |
+|---|---|
+| `shared/idVerification.ts` | Add a capability set for `PENDING`, alongside the existing status helpers |
+| `localAuth.login` | Issue a session for `PENDING` instead of refusing, flagged `deactivatedAt: null, idDocument: null` |
+| Session claims | Carry the document state so the client can gate without a second round trip |
+| `Home.tsx` | `PENDING` lands in a limited citizen view: safety advice and centre information readable, report submission disabled, persistent prompt to attach an ID |
+| Report mutations | Reject `PENDING` server-side as defence in depth, not only in the UI |
+| Review queue | Unchanged - a document still appears once attached |
+
+Net effect: no resident is locked out for lacking documents, and unverified accounts still cannot file the records that matter. Approximately one day.
+
+**9.4.2 Production bucket - OQ 13, configuration only**
+
+`server/storage.ts` is already a backend interface. `getStorage` selects the S3 backend when `S3_BUCKET` is set and the volume backend otherwise, and `warnIfStorageIsEphemeral()` fails loudly at startup if uploads would land on an ephemeral filesystem. Migration is therefore environment variables plus a smoke test - **no code change and no migration script.** The constraint to raise with the client is bucket ownership and jurisdiction, not engineering.
+
+**9.4.3 Deploy gate - prevents the failure that happened twice**
+
+Both severe incidents shared one root cause: a documented manual step with nothing enforcing it. Migration `0014` was never applied and broke login for all 13 accounts; uploads were silently dead because storage was unconfigured. Both shipped green and were found by clicking.
+
+Proposed, in order, failing fast:
+
+1. `drizzle-kit migrate` inside the running container - migrations land **before** new code, because forward-only migrations are tolerated by the old code and the reverse is what broke login
+2. `railway up`, only if step 1 succeeded
+3. Smoke test against live staging, only if step 2 succeeded
+
+| # | Check | Catches |
+|---|---|---|
+| 1 | `GET /` returns 200 | Deploy did not come up |
+| 2 | `GET /api/trpc/advice.list` returns 200 | Public read broken |
+| 3 | **`localAuth.login` with a wrong password returns 401 "Invalid email or password"** | **Schema drift.** A non-existent email still runs the `SELECT`, which is what surfaces `Unknown column`. No credentials needed, and it distinguishes "query ran and rejected the password" from "the schema is wrong" |
+| 4 | `idVerification.queue` returns 401 anonymously | Route missing or auth regressed |
+| 5 | `GET /api/upload/...` unsigned returns 403 | Storage route not wired. A 403 means the route is alive and rejected the signature; a 404 means it is missing |
+
+Must be proven to fail by deliberately breaking something. A smoke test never observed failing is not a smoke test.
+
+**9.4.4 US-5 scope corrected - OQ 8 gates US-5, not only US-6**
+
+OQ 8 asks whether media may be attached **after** submission. Two readings, two different builds: attaching during submission is required under every reading; attaching afterwards is a separate endpoint, a management UI on an existing report, and a permission decision.
+
+| Reading | Scope |
+|---|---|
+| "Yes, after submitting" | During-submission UI **plus** a post-submission endpoint, attachments management UI, and a rule for who may attach to an existing report |
+| "Yes, the citizen reports it" | Unclear; needs restating |
+
+Decision: build **during-submission only** for this release and defer post-submission. US-5 is then unblocked and OQ 8 stops being a schedule risk.
+
+### 9.5 Defaults we will adopt and simply inform the client
+
+Not worth spending goodwill on a question. State them in one line and let the client object:
+
+| | Default | Reasoning |
+|---|---|---|
+| **OQ 9** | **Yes** - ID *type* and *verification status* appear in admin reports and exports. ID **images** and ID numbers are excluded from exports by default | Staff need verification state to follow up. Exporting resident ID images by default is a privacy exposure nobody asked for |
+| **OQ 5** | 60 seconds, 50 MB, one file | See Decision 2. The question itself flags low-end phones and unstable data |
+| **OQ 8** | During submission only this release | The build required under every reading is identical |
+
+### 9.6 Revised critical path
+
+| Order | Item | Blocked on | Duration |
+|---|---|---|---|
+| 1 | Client message: two dates, content owner, video in/out | The user, today | 30 min |
+| 2 | Deploy gate (9.4.3) | Nothing - start immediately | Half a day |
+| 3 | Credential rotation and password change | The user, dashboard | 2 min |
+| 4 | US-5 + US-7 photo evidence | Nothing, given the 9.4.4 decision | 3-5 days |
+| 5 | Advice content drafts (English + Filipino) | Hazard categories confirmed | 2 days, then client review |
+| 6 | PENDING limited access (9.4.1) | Nothing | 1 day |
+| 7 | US-6 video | Caps **and** a date | 3-5 days if unblocked |
+
+The binding constraint is item 5, because it is the only item whose lead time belongs to somebody else. Engineering lead time is compressible; a subject-matter expert's calendar is not. If content ownership is not assigned this week, the safety advice feature ships complete, working and empty.
+
+### 9.7 Draft message to the client
+
+Draft for the user to edit and send. Not sent on their behalf.
+
+> Good day. Three items so we can lock the schedule.
+>
+> **1. Two dates.** Which date must the system be live, and which date is the demonstration? We will build to the live date so that your training window opens on a finished system.
+>
+> **2. Safety advice content - an offer.** The publishing system for safety advice is built and live. What remains is the Filipino and English wording, which is subject-matter content we should not write and sign off ourselves. Rather than wait, we can draft all items from official PAGASA, NDRRMC and OCD guidance in about two working days. They stay unpublished until your office reviews and approves each one. Your hazard officer would be correcting and approving wording already in front of them, not writing from a blank page. Could you name the person who will review, and the date we should send the drafts?
+>
+> **3. Photo and video evidence.** Photo evidence is ready to build. Video needs an agreed maximum length, file size and file count before we can implement it, so we ask: do you want video in this release, or in the following one? Our concern is specific rather than general - a large video is least likely to finish uploading when mobile data is congested during a storm, and a failed upload loses the evidence entirely. We recommend a 60-second, 50 MB limit. If you would like video included, we need the limits and a date agreed by [DATE] to hold the slot.
+>
+> Two further points for before go-live, no action needed yet: production file storage needs an agreed owner and jurisdiction, because resident ID documents must not sit on the disk of a single application server; and we need written confirmation of what BFP personnel are permitted to do in the system, specifically whether they approve resident registrations and view ID documents.
