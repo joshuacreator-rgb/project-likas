@@ -13,10 +13,14 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <script
-      defer
-      src="%VITE_ANALYTICS_ENDPOINT%/umami"
-      data-website-id="%VITE_ANALYTICS_WEBSITE_ID%"></script>
+    <!--
+      Analytics was never configured. The template left this tag pointing at the
+      literal placeholder %VITE_ANALYTICS_ENDPOINT%, so every page load requested
+      /%VITE_ANALYTICS_ENDPOINT%/umami, got a 502, and logged a console error.
+      Resident-facing pages should not emit errors on load. To enable analytics,
+      set VITE_ANALYTICS_ENDPOINT to a real origin before building, or restore
+      this tag with the values filled in.
+    -->
   </body>
 
 </html>
