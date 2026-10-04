@@ -1047,3 +1047,105 @@ Draft for the user to edit and send. Not sent on their behalf.
 > **3. Photo and video evidence.** Photo evidence is ready to build. Video needs an agreed maximum length, file size and file count before we can implement it, so we ask: do you want video in this release, or in the following one? Our concern is specific rather than general - a large video is least likely to finish uploading when mobile data is congested during a storm, and a failed upload loses the evidence entirely. We recommend a 60-second, 50 MB limit. If you would like video included, we need the limits and a date agreed by [DATE] to hold the slot.
 >
 > Two further points for before go-live, no action needed yet: production file storage needs an agreed owner and jurisdiction, because resident ID documents must not sit on the disk of a single application server; and we need written confirmation of what BFP personnel are permitted to do in the system, specifically whether they approve resident registrations and view ID documents.
+## 10. Verification findings - 2026-10-04
+
+> **Status: not client-approved.** Everything in this section is an internal finding or an unreviewed recommendation. Nothing here has been sent to the client, and nothing here should be forwarded until the user has reviewed it and decided. Items marked UNREVIEWED are recommendations only.
+
+This section exists because headless browser verification became available late in the day. It immediately found defects that 206 passing unit tests, a clean typecheck and every HTTP check had all missed. That is the third time in this project that a check suite has been green while a real user-facing path was broken.
+
+### 10.1 What changed
+
+| Item | Detail |
+|---|---|
+| Tool | `puppeteer-core` driving the Chrome already installed on the machine, in a throwaway temp profile. Dev dependency only; nothing in the application imports it. |
+| Scripts | `scripts/browser-check.mjs` (9 smoke checks), `scripts/verify-change-password.mjs` (end-to-end account flow), `scripts/dump-form.mjs` (DOM introspection for selectors) |
+| Access | A fresh temporary profile. It cannot read the operator's tabs, cookies, history or saved logins, and it only ever visits the URL in `BASE_URL`. |
+| Result | `browser-check.mjs` is 9 of 9 with 0 console errors. `verify-change-password.mjs` is blocked, for the reason in 10.4. |
+
+### 10.2 Defect found and fixed: 502 on every page load
+
+`client/index.html` carried the template's analytics tag with `%VITE_ANALYTICS_ENDPOINT%` left unsubstituted. Every page load requested `/%VITE_ANALYTICS_ENDPOINT%/umami`, received a 502, and logged a console error on resident-facing pages. Invisible to typecheck, to unit tests and to every HTTP check, because it only exists inside a browser. Replaced with a comment explaining how to enable analytics properly. Fixed in `4a47f1af`.
+
+### 10.3 Finding, unresolved: 358 KB of unused inline script on every page
+
+The built `index.html` is 359 KB, of which **358.5 KB is a single inline `<script id="manus-runtime">` block** injected by `vitePluginManusRuntime()` in `vite.config.ts`. Our own source contains no reference to it. It is forge tooling, not application code.
+
+| Measure | Value |
+|---|---|
+| Inline runtime | 358.5 KB per page load, uncompressed, blocking the main thread |
+| Whole `index.html` gzipped | 105.6 KB |
+| Application JS gzipped | 353.8 KB |
+| Total first-load transfer | roughly 498 KB gzipped |
+
+This is forge tooling, not application code, and its cost lands on exactly the environment the client cares about: a low-end phone on congested mobile data during a storm.
+
+**UNREVIEWED - two options for the user to choose between:**
+1. Keep the plugin in development only, so Manus previews still work but production drops it. Recovers 358 KB per page load. Lowest risk.
+2. Remove the plugin entirely. Slightly cleaner, but breaks any Manus-hosted preview that depends on the runtime.
+
+Not actioned. It touches `vite.config.ts` and needs a decision.
+
+### 10.4 Confirmed defect: a resident who registers without a Valid ID can never sign in
+
+This is the most serious finding in this section. It was inferred earlier as OQ 12 and is now verified in a browser against live staging.
+
+**The chain, each link verified:**
+
+| Step | Location | Behaviour |
+|---|---|---|
+| 1. Resident registers, no ID attached | `routers.ts:668` `validId` is `nullish` | Account is created successfully. The API returns `approvalRequired: true`, `idDocumentId: null`. |
+| 2. Account status | `registerLocalUser` | Created as **PENDING**, whether or not an ID was attached. |
+| 3. Sign-in is refused | `routers.ts:884` | `login` throws FORBIDDEN: "Your account is waiting for Administrator approval." |
+| 4. No queue lists it | `routers.ts:441-453` | `idVerification.queue` calls `listIdDocumentsForReview`. It lists **ID documents**, not accounts. An ID-less registration produces no document row, so it appears in no queue. |
+| 5. No route to approval | `routers.ts:1685` | The approve and decline mutation takes a `userId`, but no screen offers a list of PENDING **accounts** to choose from. |
+| 6. No notification | - | `RESEND_API_KEY` is unset, so no email tells the resident anything happened. |
+
+**Net effect: a permanent dead end.** The resident registers successfully, is told the account exists, and can then do nothing at all. They cannot sign in, cannot see safety advice, cannot find a centre, and cannot reach staff through the system. Staff cannot see them to approve them. No amount of waiting helps, because nothing is queued.
+
+**This contradicts the code's own stated intent.** The comment at `routers.ts:662-667` says:
+
+> A registration without one is approved on judgement, and flagged as having no ID on file.
+
+That behaviour was never built. The comment describes the intended design; the code does the opposite. This matters beyond the bug itself, because the comment is what a future maintainer would trust.
+
+**Evidence that this is already live, not theoretical:** the two accounts `test1234@gmail.com` and `test1235@gmail.com` are exactly this case. They have been stuck since before this session. They are visible in any client demonstration of the user list.
+
+**UNREVIEWED - recommendation.** Two candidate fixes, and they are not mutually exclusive:
+
+| Option | Change | Cost | Effect |
+|---|---|---|---|
+| A. Approve on registration when no ID is attached | Set `accountStatus: "APPROVED"` in `registerLocalUser` when `validId` is absent, matching the existing comment. Record that the account has no ID on file. | Under an hour | Resolves the dead end immediately, matches the documented intent, and removes the need for the queue in option B. |
+| B. Add an accounts queue | New `idVerification.pendingAccounts` query listing PENDING accounts with no ID document, and an approve and decline control for each. | Roughly half a day | Keeps staff judgement in the loop for every registration, which is defensible for a disaster-response system where residency matters. |
+
+**Our recommendation is A first, then B only if the client wants staff approval of every registration.** Reason: A costs under an hour and makes the system usable. B is the more cautious design but adds a permanent queue of accounts that staff must work through, and it depends on the same staff being available, which the schedule in 9.6 already treats as a risk.
+
+Either way, this is a question for the client in one line: should a resident be able to use the app immediately after registering, or should an officer approve every account first? The answer changes the design, and it is not ours to assume.
+
+### 10.5 Test data now present in staging and needing removal
+
+Verification created accounts through the public registration form. They are PENDING, so they cannot sign in and cannot act, but they are visible in the user list.
+
+| Email | Origin | Confirmed created |
+|---|---|---|
+| `test1234@gmail.com` | earlier session | yes |
+| `test1235@gmail.com` | earlier session | yes |
+| `likas.uicheck.mutkiw1j@gmail.com` | this session | inferred, not confirmed |
+| `likas.uicheck.mutknma9@gmail.com` | this session | yes |
+| `likas.uicheck.mutkr5bz@gmail.com` | this session | yes |
+| `likas.uicheck.mutkzh3s@gmail.com` | this session | yes |
+
+All are unreachable random addresses at gmail.com, so no message can be delivered to a real mailbox and no resident or staff account is involved. They should all be deleted before any client demonstration. Deletion requires in-container database access, which is currently blocked - see 10.6.
+
+### 10.6 Blocker: in-container database access needs one click from the user
+
+`railway ssh` requires an SSH public key linked to the Railway account, which the CLI cannot do itself. It returns a `human_signup_url` for a person to open.
+
+This blocks three queued items, all of which need in-container database access:
+
+1. Deleting the six test accounts in 10.5.
+2. Running migrations inside the container as part of the deploy gate (9.4.3). The database host is unreachable from outside, so `drizzle-kit migrate` cannot run locally.
+3. Promoting one throwaway account to APPROVED so `verify-change-password.mjs` can finish verifying the change-password screen.
+
+A throwaway ed25519 key was generated at `%LOCALAPPDATA%\Temp\opencode\likas_db_temp` for this purpose and is not yet linked. If the user declines, delete it and the verification of the change-password screen stays outstanding.
+
+**Risk note.** Linking the key grants SSH access to the staging container. It should be removed from `authorized_keys` immediately afterwards, and the local private key deleted. The user should decide whether that trade is worth making, and it is not required for any other work.
