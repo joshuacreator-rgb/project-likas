@@ -83,14 +83,14 @@ describe("auth security procedures", () => {
     expect(mockedDb.registerLocalUser).not.toHaveBeenCalled();
   });
 
-  it("places a newly registered citizen in the administrator approval queue", async () => {
+  it("approves a newly registered citizen who attached no ID, so they are not locked out", async () => {
     const created = { userId: 7, openId: "local:new-citizen", email: "new@gmail.com", name: "New Citizen", role: "citizen" as const };
     mockedDb.registerLocalUser.mockResolvedValue(created);
     const response = { cookie: vi.fn(), clearCookie: vi.fn() };
     const caller = appRouter.createCaller({ user: null, req: { protocol: "https", headers: {} } as TrpcContext["req"], res: response as unknown as TrpcContext["res"] });
 
-    await expect(caller.localAuth.register({ firstName: "New", middleName: null, lastName: "Citizen", address: "123 Pateros St", age: 25, phone: "09171234567", email: created.email, password: "valid-password-123" })).resolves.toMatchObject({ approvalRequired: true, email: created.email, approvalToken: expect.any(String) });
-    expect(mockedDb.registerLocalUser).toHaveBeenCalledWith({ firstName: "New", middleName: null, lastName: "Citizen", address: "123 Pateros St", age: 25, phone: "09171234567", name: "New Citizen", email: created.email, password: "valid-password-123", role: "citizen" });
+    await expect(caller.localAuth.register({ firstName: "New", middleName: null, lastName: "Citizen", address: "123 Pateros St", age: 25, phone: "09171234567", email: created.email, password: "valid-password-123" })).resolves.toMatchObject({ approvalRequired: false, email: created.email, approvalToken: expect.any(String) });
+    expect(mockedDb.registerLocalUser).toHaveBeenCalledWith({ firstName: "New", middleName: null, lastName: "Citizen", address: "123 Pateros St", age: 25, phone: "09171234567", name: "New Citizen", email: created.email, password: "valid-password-123", role: "citizen", hasValidId: false });
     expect(mockedEmail.sendVerificationEmail).not.toHaveBeenCalled();
     expect(response.cookie).not.toHaveBeenCalled();
   });

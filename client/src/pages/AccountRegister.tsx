@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -90,6 +90,10 @@ export default function AccountRegister({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [approvalPending, setApprovalPending] = useState(false);
+  // False when the resident registered without an ID. The account is approved on
+  // judgement in that case, so there is nothing to wait for, and a waiting screen
+  // would misreport their own status.
+  const [approvalRequired, setApprovalRequired] = useState(true);
   const [approvalAccepted, setApprovalAccepted] = useState(false);
   const [approvalToken, setApprovalToken] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -111,6 +115,7 @@ export default function AccountRegister({
   const register = trpc.localAuth.register.useMutation({
     onSuccess: result => {
       setApprovalToken(result.approvalToken);
+      setApprovalRequired(result.approvalRequired);
       setApprovalPending(true);
       if (result.idUploadFailed) setIdUploadFailed(true);
     },
@@ -130,7 +135,7 @@ export default function AccountRegister({
   });
   const approvalStatus = trpc.localAuth.checkApproval.useQuery(
     { token: approvalToken },
-    { enabled: approvalPending && Boolean(approvalToken), refetchInterval: 500 }
+    { enabled: approvalPending && approvalRequired && Boolean(approvalToken), refetchInterval: 500 }
   );
   const completeApproval = trpc.localAuth.completeApproval.useMutation({
     onSuccess: () => {
@@ -141,6 +146,16 @@ export default function AccountRegister({
       setNotice(error.message);
     },
   });
+  /**
+   * Latches the first attempt to complete approval.
+   *
+   * `onError` clears `approvalAccepted`, which puts this effect straight back
+   * into its firing condition. Without a latch, a resident whose session could
+   * not be issued would retry in a hot loop against our own API - far worse
+   * than the single failure they actually need to see. The notice tells them
+   * what happened; reloading and retrying by hand is a deliberate act.
+   */
+  const completionAttempted = useRef(false);
   const isCitizenRegistration = role === "citizen";
   const hasEmail = email.trim().length > 0;
   const isGmailEmail = /^[^\s@]+@gmail\.com$/i.test(email.trim());
@@ -195,7 +210,16 @@ export default function AccountRegister({
   }
 
   useEffect(() => {
-    if (approvalStatus.data?.accountStatus === "APPROVED" && !approvalAccepted && !completeApproval.isPending) {
+    // Nothing to poll for: the server already approved this account because no ID
+    // was attached. Go straight to the session so the resident lands in the app.
+    if (approvalPending && approvalToken && !approvalRequired && !approvalAccepted && !completeApproval.isPending && !completionAttempted.current) {
+      completionAttempted.current = true;
+      setApprovalAccepted(true);
+      completeApproval.mutate({ token: approvalToken });
+      return;
+    }
+    if (approvalStatus.data?.accountStatus === "APPROVED" && !approvalAccepted && !completeApproval.isPending && !completionAttempted.current) {
+      completionAttempted.current = true;
       setApprovalAccepted(true);
       completeApproval.mutate({ token: approvalToken });
     }
@@ -203,14 +227,18 @@ export default function AccountRegister({
       setApprovalPending(false);
       setNotice("Your registration was not approved. Please contact an Administrator.");
     }
-  }, [approvalAccepted, approvalStatus.data?.accountStatus, approvalToken, completeApproval]);
+  }, [approvalPending, approvalRequired, approvalAccepted, approvalStatus.data?.accountStatus, approvalToken, completeApproval]);
 
   function selectRole(nextRole: RegistrationRole) {
     setRole(nextRole);
     setNotice("");
     setApprovalPending(false);
     setApprovalAccepted(false);
+    setApprovalRequired(true);
     setApprovalToken("");
+    // A new registration deserves a new attempt. Clearing the latch here is what
+    // stops the guard above from also blocking a legitimate retry.
+    completionAttempted.current = false;
     register.reset();
   }
 

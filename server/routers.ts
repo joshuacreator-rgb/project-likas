@@ -665,6 +665,14 @@ export const appRouter = router({
           // anyone whose only document is a phone photo of a barangay clearance
           // they have not yet collected. A registration without one is approved
           // on judgement, and flagged as having no ID on file.
+          //
+          // That flag is load-bearing, and it used to be a lie. `registerLocalUser`
+          // hardcoded PENDING for every registration, so an ID-less resident was
+          // refused at login, produced no citizen_id_documents row, and therefore
+          // appeared in no review queue, which lists documents rather than
+          // accounts. No staff screen offered a list of PENDING accounts to approve
+          // from, so nobody could ever release them. `hasValidId` below now decides
+          // the status, and the client is told which case it is in.
           validId: uploadedIdShape.nullish(),
         })
       )
@@ -689,6 +697,7 @@ export const appRouter = router({
             .filter(Boolean)
             .join(" "),
           role: input.role,
+          hasValidId: Boolean(input.validId),
         });
 
         // The ID is attached after the account is created, not before.
@@ -744,7 +753,12 @@ export const appRouter = router({
           .setExpirationTime("1d")
           .sign(sessionKey());
         return {
-          approvalRequired: true as const,
+          // A registration with a document attached waits for a reviewer,
+          // because there is a document to review. A registration without one is
+          // approved on judgement, which is what the comment above has always
+          // claimed. Reporting this truthfully matters: the client uses it to
+          // decide whether to show the resident a waiting screen at all.
+          approvalRequired: Boolean(input.validId),
           email: user.email,
           approvalToken,
           idDocumentId,
