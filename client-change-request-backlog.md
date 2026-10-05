@@ -1262,3 +1262,53 @@ The type checker was happy. All 217 tests passed. The browser suite passed 9 of 
 The fix is a `completionAttempted` ref that latches on the first attempt, checked by both the new branch and the pre-existing polling branch, and cleared only when the resident switches role and starts a genuinely new registration. The resident now sees one clear error and can reload to retry deliberately. A failing session issue is a single visible failure, not a flood of requests.
 
 The pre-existing polling branch had the same latent hazard and is now guarded too, so this fixed a second path rather than only adding a new one.
+
+### 11.9 The 358 KB removal shipped broken, and the verification that let it through
+
+The first deploy of section 11.2 reported SUCCESS and did not work. This is recorded in full because the failure was in the verification, not in the diagnosis.
+
+**What the smoke gate caught.** The gate reported 5 of 9 checks passing. The served `index.html` was 359.8 KB with the inline runtime still in it, and the entry bundle was 1619.2 KB, which is roughly 377 KB larger than the local build. The plugin adds the runtime to the bundle as well as the HTML, so both numbers pointed the same way.
+
+**Root cause.** The gate in `vite.config.ts` was:
+
+```
+...(process.env.NODE_ENV === "production" ? [] : [vitePluginManusRuntime()]),
+```
+
+`process.env.NODE_ENV` is not reliably set at the moment Vite evaluates its config file. On the machine where this was written and measured it was set to production, so the runtime was correctly dropped. On the Railway build host it was not set, so the plugin was included and the 358 KB shipped anyway.
+
+Confirmed rather than assumed: rebuilding locally with `NODE_ENV=development` reproduced the live HTML at 359.8 KB, matching the deployment. The fix replaces the environment read with Vite's own `command` parameter, which is `build` for `vite build` and `serve` for `vite dev`, and is a value Vite passes in rather than one the host has to remember to set. Re-verified with `NODE_ENV=development` still set: 1.3 KB, runtime absent. Development still serves 360 KB with the runtime, so hosted previews are unaffected.
+
+**The lesson, which is the same one as 11.8.** The check was run in exactly one environment, and it passed there. Nothing about running it locally could have told us it would fail on the build host. A verification that only ever runs on the author's machine is an assertion, not a verification. The test that would have caught it is trivial to write and was simply not written: build with `NODE_ENV=development` and assert the runtime is absent. Where a build behaviour can be environment-sensitive, it needs a test that makes the environment hostile on purpose.
+
+This is the fifth defect in this project that typecheck and the unit tests both passed, and the second this session that only measurement caught.
+
+### 11.10 The deploy gate from 9.4.3 is now built
+
+`scripts/smoke-staging.mjs`, nine checks against the live origin, and `scripts/deploy-staging.ps1`, which refuses to report a deploy as successful unless the smoke gate passes and prints a migration warning instead of implying the deploy is complete.
+
+**The gate had two bugs of its own on its first run, both fixed.** It called the router name rather than the full dotted procedure path, so `localAuth.login` was requested as `localAuth` and returned "No procedure found on path localAuth". And it did not unwrap superjson's `.json` envelope, so a healthy `advice.list` returning `{"json":[]}` was reported as a failure. Both were my errors, caught by hand-testing the live API before believing the gate. A gate that produces false failures gets ignored, which is worse than having none, so the correct tRPC request and response shapes are now documented at the call site.
+
+**The checks that carry the weight, and what each one catches:**
+
+| Check | What a failure means |
+|---|---|
+| No inline `manus-runtime` in the served HTML | The deployed bundle predates 11.2. This is the stale-deploy detector. |
+| `advice.list` answers | The container predates Wave 3. |
+| `login` gives 401 naming the failure, not 500 | Schema drift between client and server. |
+| `idVerification.queue` refuses anonymous | The session guard is gone. A security finding, not a stale deploy. |
+| Upload route refuses a forged signature | A regression in the signed-URL guard. |
+
+The login check randomises the address on every run, because registration and login are rate limited per email and a fixed address would eventually lock the gate itself out.
+
+### 11.11 Two housekeeping items found while deploying
+
+**`railway.toml` is deprecated.** Railway warns that Config as Code is deprecated and that existing files keep working only until **2026-12-01**. That is inside the delivery window this project is working against. Migrating is `railway config migrate`, which should be done before the deadline rather than discovered during it.
+
+**`.env.bak` sits in the working tree.** It is 400 bytes, dated 2026-09-15, and holds a `DATABASE_URL` and a `JWT_SECRET`. It is not tracked by git and is ignored by the `*.bak` rule, so it has never reached the public repository and was not uploaded by this deploy. Its `DATABASE_URL` points at `127.0.0.1` as `root`, so it is a local development credential rather than the production one. The `JWT_SECRET` in it predates the rotation and should be assumed superseded. It has no remaining use and is recommended for deletion, which is the user's call rather than ours.
+
+### 11.12 Known flake: the test suite fails under CPU contention
+
+Running `vitest run` while a Vite dev server or preview server is running causes four files to fail collection with "Hook timed out in 10000ms", and 33 tests to be skipped. This is not a code defect and the suite passes 217 of 217 with nothing else running. It was reproduced twice, deliberately, by running the suite alongside a dev server.
+
+It is recorded because a suite that fails intermittently under load trains people to ignore it, which is how the green-suite problem in 11.8 started. The honest fix is a `hookTimeout` above the default in `vitest.config.ts`, or capping concurrency so collection is not competing with itself. Not done here, because it is a tooling change that should be made deliberately rather than as a side effect of a deploy.
