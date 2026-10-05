@@ -1068,6 +1068,10 @@ This section exists because headless browser verification became available late 
 
 ### 10.3 Finding, unresolved: 358 KB of unused inline script on every page
 
+> **Status: DECIDED and built 2026-10-05.** Option 1 was taken, keeping the plugin in
+> development only. Measured outcome and verification in 11.2. The analysis below is
+> preserved exactly as written on 2026-10-04, before the decision.
+
 The built `index.html` is 359 KB, of which **358.5 KB is a single inline `<script id="manus-runtime">` block** injected by `vitePluginManusRuntime()` in `vite.config.ts`. Our own source contains no reference to it. It is forge tooling, not application code.
 
 | Measure | Value |
@@ -1086,6 +1090,10 @@ This is forge tooling, not application code, and its cost lands on exactly the e
 Not actioned. It touches `vite.config.ts` and needs a decision.
 
 ### 10.4 Confirmed defect: a resident who registers without a Valid ID can never sign in
+
+> **Status: DECIDED and built 2026-10-05.** Option A was taken, with option B left open
+> as the client's call. Measured outcome, verification and two new residual risks in
+> 11.3. The analysis below is preserved exactly as written on 2026-10-04.
 
 This is the most serious finding in this section. It was inferred earlier as OQ 12 and is now verified in a browser against live staging.
 
@@ -1150,3 +1158,107 @@ This blocks three queued items, all of which need in-container database access:
 A throwaway ed25519 key was generated at `%LOCALAPPDATA%\Temp\opencode\likas_db_temp` for this purpose and is not yet linked. If the user declines, delete it and the verification of the change-password screen stays outstanding.
 
 **Risk note.** Linking the key grants SSH access to the staging container. It should be removed from `authorized_keys` immediately afterwards, and the local private key deleted. The user should decide whether that trade is worth making, and it is not required for any other work.
+
+## 11. Decision record - 2026-10-05
+
+Two recommendations from 10.3 and 10.4 were approved by the user and built the same day. Both are recorded here with what was measured, not with what was expected.
+
+### 11.1 Standing caveat on these records
+
+Every number below was measured against a real build or a real browser, not inferred from reading code. That distinction matters because of a pattern established earlier in this project: four of seven session defects passed typecheck and passed the unit tests, and were caught only by clicking. The green suite lied three separate times. Where something was verified by measurement it says so; where it is still unverified it says that instead.
+
+### 11.2 Inline runtime removed from production builds - 358 KB recovered
+
+**Decision.** Keep `vitePluginManusRuntime()` in development so Manus-hosted previews keep working, and drop it from production builds. Option 2, removing it entirely, was rejected because it would break those previews for no additional resident benefit.
+
+**What changed.** `vite.config.ts` now includes the plugin conditionally:
+
+```
+...(process.env.NODE_ENV === "production" ? [] : [vitePluginManusRuntime()]),
+```
+
+**This gate was verified rather than assumed.** `process.env.NODE_ENV` is not documented as reliably set when Vite evaluates its config file, and a gate that silently evaluates false would have been a no-op that looked like a success. So the built output was measured directly, twice, for both halves of the promise:
+
+| Measurement | Dev server | Production build |
+|---|---|---|
+| `index.html` served | 359.7 KB | 0.9 KB, then 1.2 KB after the comment in 11.5 |
+| `<script id="manus-runtime">` present | yes | no |
+| Inline script blocks in the document | 1 | 0 |
+| Hosted previews still work | yes | not applicable |
+
+**Independent confirmation.** The production build was served locally with `vite preview` and put through the full headless browser suite: **9 of 9 checks passed**, including all five public routes, the signed-out redirect on `/account/security`, confirmation that no password form is exposed to unauthenticated visitors, and no horizontal overflow at 390 px. The app boots and routes correctly with the 358 KB block absent, which was the actual risk.
+
+The only console errors during that run were six tRPC failures, because a static preview has no `/api/trpc` backend. Those are an artefact of the harness, not a defect, and none of them referenced the removed runtime.
+
+**A false alarm was checked and cleared.** The app bundle still contains the string `manus-runtime`, at `localStorage.setItem("manus-runtime-user-info", ...)`. That is our own code writing a local storage key, unrelated to the removed script. Removing the runtime does not affect it.
+
+### 11.3 Registration no longer dead-ends a resident without a Valid ID
+
+**Decision.** Option A, approve on registration when no ID is attached. Option B, a staff-facing queue of PENDING accounts, is left open as the client's decision and is not built.
+
+**What changed, in three places:**
+
+| File | Change |
+|---|---|
+| `server/db.ts` | `registerLocalUser` takes a new `hasValidId: boolean` and writes `accountStatus: input.hasValidId ? "PENDING" : "APPROVED"`. Previously it hardcoded `PENDING` for every registration. |
+| `server/routers.ts` | Passes `hasValidId: Boolean(input.validId)` and returns a truthful `approvalRequired` instead of the hardcoded `true`. The misleading comment at 662-667 now states the consequence of the flag, including how the old behaviour was a dead end. |
+| `client/src/pages/AccountRegister.tsx` | Tracks `approvalRequired`, skips the pointless 500 ms poll when no approval is outstanding, and calls `completeApproval` immediately so the resident lands in the app instead of watching a waiting screen they are not in. |
+
+**Resulting behaviour.** A citizen who registers with no ID is approved on judgement and is signed in on arrival. A citizen who attaches an ID stays PENDING, because there is a document for a reviewer to look at, and the existing review workflow is unchanged. The client is told which of the two cases occurred rather than being told `true` unconditionally.
+
+**The db layer is tested directly, not only through the router.** The defect lived in `registerLocalUser`, so a router-only test would have missed the original bug entirely and could pass again against a regression. `server/register-local-user.test.ts` fakes the drizzle insert chain and asserts on the row that is actually written.
+
+**Test results.** 21 files, 217 tests, all passing. Typecheck clean. That is 11 new tests across two new files, plus one existing test in `auth-security.test.ts` that was corrected because it encoded the old behaviour:
+
+| File | Tests | Covers |
+|---|---|---|
+| `server/register-local-user.test.ts` | 5 | `APPROVED` with no ID, `PENDING` with an ID, never an undefined status, credential row always created, email normalisation |
+| `server/registration-approval.test.ts` | 6 | truthful `approvalRequired` both ways, `hasValidId` passed through both ways, token issued either way, failed-upload case |
+| `server/auth-security.test.ts` | amended | the old test asserted `approvalRequired: true` for an ID-less registration, which is the defect itself |
+
+**Two constraints the tests surfaced, worth recording because they are real behaviour:**
+
+1. **The Gmail-only rule is enforced in the zod schema, not just in the form.** `resident@example.com` is rejected by the server with "Use a Gmail address ending in @gmail.com." The client-side hint was never the only gate.
+2. **Registration is rate limited to 5 per hour per email address**, keyed `register:${email}`. This is correct behaviour and it is why the new tests use a unique address per call rather than mocking the limiter away. Worth noting for the future: a resident who mistypes and retries, or retries on a flaky connection, can exhaust that budget and be locked out for an hour with no explanation and no email, since `RESEND_API_KEY` is unset.
+
+### 11.4 Residual risks and limits of this change, stated plainly
+
+**Not fixed: a failed ID upload still strands the account.** The account is created PENDING before the upload is attempted, so if storage fails the account stays PENDING with no document row, which is the same shape of dead end as 10.4. It is recoverable inside that browser session, because the waiting screen offers an "Upload my ID" retry, and a test asserts this case explicitly. A resident who closes the tab first has no way back in, because there is still no staff screen listing PENDING accounts. Fixing it properly means promoting the account to APPROVED after a failed upload, which also requires a route to attach an ID once signed in. That is more than the bug it fixes and it was not built under this decision.
+
+**Still open: option B.** Whether a resident may use the app immediately after registering, or an officer must approve every account, remains the client's call and is not ours to assume. Option A is the default we shipped. Option B is additive and can be built later without undoing anything here.
+
+**Not verified in a browser: the new registration path.** The code, the tests and the build are verified. The end-to-end resident journey - register without an ID, be signed straight in - has not been clicked through, because that needs a running backend and the database is unreachable from outside the container, see 10.6. This is the single most important remaining verification and it is the reason the deploy gate in 9.4.3 matters.
+
+### 11.5 Incidental finding: the credential-capture script is not reachable in production
+
+`vitePluginManusDebugCollector()` is the root cause of the `.manus-logs` directory that captured an admin password earlier in this project. It is still emitted into the production build, as `dist/public/__manus__/debug-collector.js`, 24.6 KB.
+
+It is **not loaded**. The built `index.html` contains no reference to it. Its injection and middleware only run under the Vite dev server, so the credential capture was a development-only exposure and staging was never exposed to it. The file is inert dead weight in the build output rather than a live risk. Recorded so that nobody later re-enables it in production, and so the 24.6 KB is not mistaken for an active vulnerability.
+
+### 11.6 Incidental fix: a misleading dev warning about analytics
+
+The explanatory comment added to `client/index.html` when the 502 defect was fixed spelled out the placeholder token literally. Vite scans that file for `%VITE_*%` tokens and warned that the variable was undefined, which read as though a broken analytics tag were still present and would send the next person looking for a tag that no longer exists. The comment now names the variable without the percent delimiters. Verified: the rebuilt `index.html` contains no `%VITE_` token.
+
+### 11.7 Bundle size, still open and still unscheduled
+
+Unchanged by this work, recorded again so it is not lost:
+
+| Asset | Uncompressed |
+|---|---|
+| `index.html` | 1.2 KB, was 359.5 KB |
+| Application JS | 1,241.9 KB |
+| CSS | 196.2 KB |
+
+The build still emits a chunk-size warning. This has not been scheduled. The 1.24 MB entry bundle is a real cost on the low-end phone on congested data that the client named as the target environment, and it is now by some distance the largest remaining performance item. It is not on the critical path to November and was not treated as one.
+
+### 11.8 Defect introduced and fixed in the same change: a hot retry loop on session failure
+
+Recording this because it is exactly the class of defect that a green suite does not catch.
+
+The new immediate-completion branch in `AccountRegister.tsx` fired `completeApproval` from an effect whose guard included `!approvalAccepted`. The mutation's `onError` handler sets `approvalAccepted` back to `false`. So a resident whose session could not be issued would clear the guard and be fired at again immediately, with no polling to space the attempts out, looping against our own API as fast as the network allows.
+
+The type checker was happy. All 217 tests passed. The browser suite passed 9 of 9. It was caught only by reading the effect and its error handler together, which is the review step that found the 502 and the false-passing registration assertion earlier in this project.
+
+The fix is a `completionAttempted` ref that latches on the first attempt, checked by both the new branch and the pre-existing polling branch, and cleared only when the resident switches role and starts a genuinely new registration. The resident now sees one clear error and can reload to retry deliberately. A failing session issue is a single visible failure, not a flood of requests.
+
+The pre-existing polling branch had the same latent hazard and is now guarded too, so this fixed a second path rather than only adding a new one.
