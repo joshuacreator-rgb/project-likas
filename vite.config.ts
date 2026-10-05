@@ -150,7 +150,21 @@ function vitePluginManusDebugCollector(): Plugin {
   };
 }
 
-const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()];
+// vitePluginManusRuntime injects a 358 KB inline <script> into every built page
+// so the Manus host can drive a preview. Our source never references it, and on
+// staging it shipped to every resident on every page load, which is the wrong
+// place to spend 358 KB for a low-end phone on congested data. Development keeps
+// it so hosted previews still work; production drops it.
+//
+// The debug collector below is dev-only by construction: its transformIndexHtml
+// and middleware only ever run under the Vite dev server.
+const plugins = [
+  react(),
+  tailwindcss(),
+  jsxLocPlugin(),
+  ...(process.env.NODE_ENV === "production" ? [] : [vitePluginManusRuntime()]),
+  vitePluginManusDebugCollector(),
+];
 
 export default defineConfig({
   plugins,

@@ -14,12 +14,16 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <!--
-      Analytics was never configured. The template left this tag pointing at the
-      literal placeholder %VITE_ANALYTICS_ENDPOINT%, so every page load requested
-      /%VITE_ANALYTICS_ENDPOINT%/umami, got a 502, and logged a console error.
-      Resident-facing pages should not emit errors on load. To enable analytics,
-      set VITE_ANALYTICS_ENDPOINT to a real origin before building, or restore
-      this tag with the values filled in.
+      Analytics was never configured. The template left an analytics tag pointing
+      at the unsubstituted VITE_ANALYTICS_ENDPOINT placeholder, so every page load
+      requested an unresolved path, got a 502, and logged a console error.
+      Resident-facing pages should not emit errors on load, so the tag was
+      removed. To enable analytics, set VITE_ANALYTICS_ENDPOINT to a real origin
+      before building, then restore the tag with the values filled in.
+
+      The percent-delimited placeholder is deliberately not spelled out literally
+      below. Vite scans this file for those tokens and warns that the variable is
+      undefined, which reads as though a broken tag were still here.
     -->
   </body>
 
