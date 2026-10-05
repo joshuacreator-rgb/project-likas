@@ -3,7 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import fs from "node:fs";
 import path from "node:path";
-import { defineConfig, type Plugin, type ViteDevServer } from "vite";
+import { defineConfig, type Plugin, type PluginOption, type ViteDevServer } from "vite";
 import { vitePluginManusRuntime } from "vite-plugin-manus-runtime";
 
 // =============================================================================
@@ -150,24 +150,39 @@ function vitePluginManusDebugCollector(): Plugin {
   };
 }
 
-// vitePluginManusRuntime injects a 358 KB inline <script> into every built page
-// so the Manus host can drive a preview. Our source never references it, and on
-// staging it shipped to every resident on every page load, which is the wrong
-// place to spend 358 KB for a low-end phone on congested data. Development keeps
-// it so hosted previews still work; production drops it.
-//
-// The debug collector below is dev-only by construction: its transformIndexHtml
-// and middleware only ever run under the Vite dev server.
-const plugins = [
-  react(),
-  tailwindcss(),
-  jsxLocPlugin(),
-  ...(process.env.NODE_ENV === "production" ? [] : [vitePluginManusRuntime()]),
-  vitePluginManusDebugCollector(),
-];
+/**
+ * Builds the plugin list for the Vite command being run.
+ *
+ * vitePluginManusRuntime injects a 358 KB inline <script> into every built page
+ * so the Manus host can drive a preview. Our source never references it, and on
+ * staging it shipped to every resident on every page load, which is the wrong
+ * place to spend 358 KB for a low-end phone on congested data. Development keeps
+ * it so hosted previews still work; production drops it.
+ *
+ * This keys off Vite's `command`, which is "build" for `vite build` and "serve"
+ * for `vite dev`. It deliberately does NOT key off `process.env.NODE_ENV`, which
+ * was the first attempt and is not reliably set at the moment this file is
+ * evaluated. That version looked correct here, was verified here, and shipped
+ * with the runtime still in it, because the Railway build host did not have
+ * NODE_ENV set to production. The verification had only ever run on a machine
+ * where it happened to be set, which is the same mistake as trusting a green
+ * suite: the check passed in the one environment it was run in and nowhere else.
+ * `command` is a value Vite passes in, so it cannot fail the same way.
+ */
+function pluginsFor(command: string): PluginOption[] {
+  return [
+    react(),
+    tailwindcss(),
+    jsxLocPlugin(),
+    ...(command === "serve" ? [vitePluginManusRuntime()] : []),
+    // The debug collector is dev-only by construction: its transformIndexHtml
+    // and middleware only ever run under the Vite dev server.
+    vitePluginManusDebugCollector(),
+  ];
+}
 
-export default defineConfig({
-  plugins,
+export default defineConfig(({ command }) => ({
+  plugins: pluginsFor(command),
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
@@ -198,4 +213,4 @@ export default defineConfig({
       deny: ["**/.*"],
     },
   },
-});
+}));
