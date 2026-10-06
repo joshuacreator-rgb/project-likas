@@ -69,6 +69,7 @@ import {
   type AdviceRecord,
   type AdviceStepRecord,
 } from "../../../shared/advice";
+import { builtinAdvice } from "../../../shared/adviceContent";
 
 /** Published guidance plus its steps, as cached and as returned by the API. */
 type CitizenAdviceRow = AdviceRecord & { steps: AdviceStepRecord[] };
@@ -386,11 +387,17 @@ export default function CitizenHome() {
   const adviceRows = useMemo<CitizenAdviceRow[]>(
     () =>
       sortAdviceForDisplay(
-        ((publishedAdvice?.length ? publishedAdvice : cachedAdvice) ?? []) as CitizenAdviceRow[],
+        (publishedAdvice?.length
+          ? publishedAdvice
+          : cachedAdvice.length
+            ? cachedAdvice
+            : builtinAdvice) as CitizenAdviceRow[],
       ),
     [publishedAdvice, cachedAdvice],
   );
   const usingCachedAdvice = !publishedAdvice?.length && cachedAdvice.length > 0;
+  /** §13: built-in tips are the guarantee that advice always shows; published content wins over them. */
+  const usingBuiltinAdvice = !publishedAdvice?.length && cachedAdvice.length === 0;
   const adviceFilters = useMemo(() => adviceCategoriesInUse(adviceRows), [adviceRows]);
   const visibleAdvice = useMemo(
     () =>

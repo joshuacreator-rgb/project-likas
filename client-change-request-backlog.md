@@ -1487,3 +1487,31 @@ AC 6 of US-5 and AC 4 of US-7 are the acceptance criteria a deadline removes fir
 **4. The stale `/manus-storage` claims in this file and in `drizzle/schema.ts` are corrected.** Section 5 lines 58, 95, 204, 270 and 765 each carry a bracketed correction pointing at 12.2; the schema comment now describes the real capability-URL behaviour and the `idVerification.imageUrl` serving route. The claims are preserved in place so the error history stays readable.
 
 **5. Client architecture note for US-6.** All attachment limits, rejection rules and the status state machine live in `client/src/lib/reportEvidence.ts`, which never touches the tRPC client — `EvidenceSend` is injected. US-6 swaps the transport by changing that sender and nothing else; the UI and the AC 6/AC 4 statuses are already built against the injected seam.
+
+## 13. Client change: built-in safety advice on the citizen home page
+
+Requested on 2026-10-06, relayed by the user on behalf of the client: safety advice should appear on the main page or dashboard below the contents, organised by disaster type, each with a description or tips. The user also mentioned a short highlight video, then rescinded it before build: the advice is to be hardcoded, with nothing for an admin to upload or edit, so the citizen home always has advice or tips.
+
+**Decisions (2026-10-06, all recommended and approved):**
+
+| Decision | Agreed |
+|---|---|
+| Where the tips live | Static typed content inside the app (`shared/adviceContent.ts`), not the database |
+| Video | **Dropped.** No admin video upload, no served-video route, no new migration |
+| Content source | Official PAGASA / NDRRMC / OCD guidance, bilingual (English + Filipino); the wording was reviewed and approved by the user before shipping, because it is client-facing |
+| Fallback rule | Built-in tips are the guarantee: the citizen home always shows advice. Published advice wins over the offline cache, and either wins over built-in content, whenever it exists |
+| Placement | Already satisfied: `#safety-advice` is already the last section on the citizen home page; the report form is a modal overlay, not inline content, so no reorder was needed |
+
+**What changed**
+
+| File | Change |
+|---|---|
+| `shared/adviceContent.ts` | Five built-in items (Earthquake, Storm, Flood, Fire, General) with bilingual title, summary, body and step tips. Negative ids so built-in rows can never collide with database ids |
+| `client/src/pages/CitizenHome.tsx` | `adviceRows` falls back to built-in content when the server feed and the offline cache are both empty; filters, read-aloud, cards and the offline cache are reused unchanged |
+| `shared/adviceContent.test.ts` | Six tests: every category exactly once, unique negative ids and slugs, full bilingual coverage, actionable steps in both languages, known categories, and every item passes the shared publish gate used for authored content |
+
+**Why not the database.** The advice tables and the admin authoring workspace are unchanged; the built-in list is a display guarantee only. This unit has no migration and is independent of the 0014 reconciliation. If officials later publish guidance through the workspace, published content replaces the built-in tips automatically.
+
+**Estimate.** Scoped at 3-5 hours; implemented 2026-10-06. No database, no video, no admin-UI changes.
+
+**Residual (OQ 6 stands).** Built-in tips are safe, general guidance written from official sources; they are not LGU-endorsed hazard-specific instructions. The client office should still name a content owner who reviews and owns the wording before the defence.
