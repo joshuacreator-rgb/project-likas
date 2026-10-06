@@ -1251,6 +1251,8 @@ Unchanged by this work, recorded again so it is not lost:
 
 The build still emits a chunk-size warning. This has not been scheduled. The 1.24 MB entry bundle is a real cost on the low-end phone on congested data that the client named as the target environment, and it is now by some distance the largest remaining performance item. It is not on the critical path to November and was not treated as one.
 
+**Updated 2026-10-06.** This table previously described a local build that did not match what residents were served: the live entry was 1619 KB because of 11.13. After that was fixed, the served bundle is `index-B7TNj-2C.js` at 1237 KB, which agrees with the figure above. The number in this section was right; it just was not the number anyone was downloading. What remains here is genuine application code, so this item stands unchanged and unscheduled.
+
 ### 11.8 Defect introduced and fixed in the same change: a hot retry loop on session failure
 
 Recording this because it is exactly the class of defect that a green suite does not catch.
@@ -1267,7 +1269,9 @@ The pre-existing polling branch had the same latent hazard and is now guarded to
 
 The first deploy of section 11.2 reported SUCCESS and did not work. This is recorded in full because the failure was in the verification, not in the diagnosis.
 
-**What the smoke gate caught.** The gate reported 5 of 9 checks passing. The served `index.html` was 359.8 KB with the inline runtime still in it, and the entry bundle was 1619.2 KB, which is roughly 377 KB larger than the local build. The plugin adds the runtime to the bundle as well as the HTML, so both numbers pointed the same way.
+**What the smoke gate caught.** The gate reported 5 of 9 checks passing. The served `index.html` was 359.8 KB with the inline runtime still in it, and the entry bundle was 1619.2 KB, roughly 377 KB larger than the local build.
+
+**Correction added 2026-10-06, after 11.13.** The first version of this paragraph claimed both numbers pointed at the same cause, that the plugin added the runtime to the bundle as well as the HTML. It did not. The bundle hash stayed `index-D0Ca16Yr.js` at 1619 KB across the deploy that removed the plugin from the HTML, so the plugin never touched the bundle. The 377 KB was React in development mode the whole time, which is why it survived a fix aimed squarely at it. The HTML number and the bundle number were two separate defects that happened to have the same cause and happened to be noticed together, and reading them as one was wrong.
 
 **Root cause.** The gate in `vite.config.ts` was:
 
@@ -1351,6 +1355,8 @@ Deploying that produced an unchanged bundle: the same hash `index-D0Ca16Yr.js` a
 `build` was the only script that did not pin `NODE_ENV`: `dev` pins development and `start` pins production. `cross-env` matters because the repository is built on Windows as well as on the Linux build host, and a bare `NODE_ENV=production` prefix is a POSIX shell assignment that does not work there.
 
 `nixpacks.toml` was left with the correct setting rather than reverted, but with a prominent header stating that the file is not read, so that nobody reads it and believes the build is pinned. A configuration file claiming an effect it does not have is the same failure as the `validId` comment in 10.4, which is why it was corrected rather than deleted.
+
+**Result after deploying the effective fix.** Gate 10/10, browser check 9/9 with zero console errors. The served entry went from `index-D0Ca16Yr.js` at 1619 KB to `index-B7TNj-2C.js` at 1237 KB, a reduction of 382 KB, about 23 percent of first-load transfer, with neither development marker present. The hash changing is itself the evidence that the configuration ran this time.
 
 **A gate check was added** asserting the served bundle contains no React development-mode markers. It was validated against the live build while the defect was still present, where it failed 9 of 10 and named both markers. That ordering matters: a check only ever seen passing is worth nothing, which is precisely the lesson from 11.9.
 
