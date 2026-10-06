@@ -108,13 +108,6 @@
       "breakpoints": true
     },
     {
-      "idx": 14,
-      "version": "5",
-      "when": 1791015092423,
-      "tag": "0014_citizen_id_documents",
-      "breakpoints": true
-    },
-    {
       "idx": 15,
       "version": "5",
       "when": 1791293463568,
