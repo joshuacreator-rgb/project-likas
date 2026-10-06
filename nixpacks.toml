@@ -4,5 +4,23 @@ nixPkgs = ["nodejs_20", "nodePackages.pnpm"]
 [phases.install]
 cmds = ["pnpm install --no-frozen-lockfile"]
 
+# NODE_ENV is pinned here rather than left to the build host.
+#
+# It was not pinned, and the build host's value is development, which caused two
+# shipped defects from one root cause:
+#
+#   - The entry bundle went out with React in development mode: 1619 KB against
+#     1242 KB for the same source built locally in production mode. That is
+#     ~377 KB of extra transfer plus a slower reconciler, landing on the low-end
+#     phone over congested data that the client named as the target. This is the
+#     real cause of the "1.6 MB entry bundle" flag, which was never a code-size
+#     problem.
+#   - The vite.config gate that decides whether to inject a 358 KB inline script
+#     read process.env.NODE_ENV. On the build host it was not "production", so
+#     the plugin was included and the runtime shipped to every resident.
+#
+# Deliberately scoped to the build phase only. Pinning it for the install phase
+# would make pnpm omit devDependencies, and vite lives there, so the build would
+# fail outright.
 [phases.build]
-cmds = ["pnpm build"]
+cmds = ["NODE_ENV=production pnpm build"]

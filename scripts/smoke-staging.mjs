@@ -106,14 +106,29 @@ async function checkShell() {
       const text = await asset.text();
       const kb = Math.round((Buffer.byteLength(text) / 1024) * 10) / 10;
       record("entry bundle is served", asset.status === 200, `status=${asset.status}, ${kb} KB`);
-      // The runtime is inlined into the HTML, not the bundle, but a bundle over
-      // about 1.5 MB means the runtime plugin was active at build time. It also
-      // drags in minification differences, so treat it as a signal to look, not
-      // as a failure on its own.
-      if (kb > 1500) {
-        console.log(`    note  bundle is ${kb} KB, over the 1.5 MB line. Check whether`);
-        console.log("          the build host is minifying and whether the runtime");
-        console.log("          plugin was active.");
+
+      // The build host did not pin NODE_ENV, so the app went out with React in
+      // development mode: 1619 KB against 1242 KB for the same source, a slower
+      // reconciler, and dev-only warning text, all on the low-end phone that is
+      // the stated target. Both strings below are development-only React source
+      // that Vite's define and tree-shaking remove from a production build, so
+      // their presence means the build ran without NODE_ENV=production.
+      const devMarkers = [
+        ["react.development", "react.development"],
+        [
+          "The above error occurred in the",
+          "React's development-only error boundary message",
+        ],
+      ];
+      const present = devMarkers.filter(([needle]) => text.includes(needle)).map(([, label]) => label);
+      record(
+        "bundle is a production build, not React development mode",
+        present.length === 0,
+        present.length ? `development React detected: ${present.join(", ")}` : "",
+      );
+      if (present.length) {
+        console.log(`    note  bundle is ${kb} KB. Expect about ${kb - 377} KB once this`);
+        console.log("          is a production build. Check NODE_ENV in nixpacks.toml.");
       }
     } catch (error) {
       record("entry bundle is served", false, String(error).slice(0, 120));
