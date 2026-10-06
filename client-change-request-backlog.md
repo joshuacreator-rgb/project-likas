@@ -1361,3 +1361,34 @@ Deploying that produced an unchanged bundle: the same hash `index-D0Ca16Yr.js` a
 **A gate check was added** asserting the served bundle contains no React development-mode markers. It was validated against the live build while the defect was still present, where it failed 9 of 10 and named both markers. That ordering matters: a check only ever seen passing is worth nothing, which is precisely the lesson from 11.9.
 
 **Limits of this record.** The fix was confirmed locally by building with the environment variable absent from the shell, which still produced a production bundle at 1241.9 KB with neither marker present, and by the gate against the live build. The Linux build host cannot be reproduced locally, so Railway's detection behaviour was established from the build log rather than from the deploy result. The `nixpacks.toml` phase in the repository also remains unverified in the sense that it is inert: if Railway later honours it, both settings are already correct, but no deploy in this backlog has exercised that path. If development React reappears, the fallback is to set `NODE_ENV` in the Railway dashboard as a service environment variable, which is the user's action under the standing rule that configuration lives there rather than in the repository. Note that as a runtime variable it would not reach the bundler at all, so it would fix nothing; it has to be set where the build command runs, or in `package.json`.
+
+### 11.14 Demo credentials in the public repository: assessed, not currently a breach
+
+Found by running the first secret scan of the session, which itself is reported in 11.15. `client/src/lib/staticAuth.ts` exports four accounts in plaintext:
+
+```
+admin:     { email: "admin@likas.local",     password: "Admin@12345" }
+staff:     { email: "staff@likas.local",     password: "Staff@12345" }
+responder: { email: "responder@likas.local", password: "Responder@12345" }
+citizen:   { email: "citizen@likas.local",   password: "Citizen@12345" }
+```
+
+The repository is public, so these are readable by anyone. The question is what they open, and the answer turns out to be nothing, for three independently measured reasons.
+
+**One: they never reach residents.** The only call site is `Login.tsx` line 89, inside an `onError` handler that begins with `if (!import.meta.env.DEV) return;`. Vite evaluates `import.meta.env.DEV` to a literal `false` for a production build, so the whole block becomes dead code and is dropped. Measured on the live `index-B7TNj-2C.js`: `staticRoleCredentials` absent, `authenticateStaticAccount` absent, `Admin@12345` absent. The string `12345` does appear in the bundle, but at that occurrence it is part of the phone number `09171234567`, checked in context rather than by match.
+
+**Two: there is nothing behind them.** No seed, migration, or server file contains `admin@likas.local` or `Admin@12345`. `authenticateStaticAccount` is entirely client-side, and its session lives in `sessionStorage`. It never talks to the server, so it cannot authenticate against anything.
+
+**Three: the server does not trust the client.** The smoke gate already establishes this independently, with `idVerification.queue` and the forged-signature upload both returning 401 and 403 for unauthenticated callers.
+
+**The residual exposure, stated accurately rather than dismissed.** Route guards do read client-writable state: `useAuth` computes `isAuthenticated` from `meQuery.data ?? staticDemoUser`, where `staticDemoUser` comes from `sessionStorage`. Anyone can write that key and the client will render authenticated screens. That is a UI ghost state, not an access path, because every screen's data still comes from a server that rejects the request. The exposure is therefore cosmetic in production, and real only if a future change ever trusts client state for a decision the server should be making.
+
+**Recommendation: record and leave it.** These are `@likas.local` addresses, not a routable domain, and not accounts on any server. Removing them would break the local development login that `dev` depends on. If the client ever asks for a demo login, that is a separate decision with a separate design, not a reason to delete working developer tooling before November.
+
+### 11.15 The standing pre-push secret scan had no script behind it
+
+The working rule for this project is that a pre-push secret scan is required, because the repository is public. Until this session that rule was enforced by care rather than by tooling: no script exists under `scripts/` for it, which is why 11.14 was found only when a scan was run by hand, after three commits had already been pushed.
+
+The scan as run by hand covered tracked files against ten patterns, JWTs, common API key prefixes, private key blocks, `JWT_SECRET` and `DATABASE_URL` assignments, password assignments, and connection strings with embedded credentials. The diff of the three commits pushed this session was clean. Every working-tree hit was a test fixture, an empty `.env.example` value, or documentation text, with 11.14 the one item that was neither and is assessed separately above.
+
+**Recommendation: promote the ad-hoc scan to `scripts/scan-secrets.mjs` and wire it to `scripts/deploy-staging.ps1`, which already refuses to deploy when a gate fails.** The value is not the first run, which has now happened, but that the next run happens without anyone remembering to do it. This is the same shape as 11.9 and 11.13: a safeguard that depends on someone remembering is not a safeguard. Cost is about half a day. Awaiting approval before any code is written.
