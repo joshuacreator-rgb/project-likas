@@ -63,6 +63,7 @@ import {
   listDemoAccounts,
   listEvacuees,
   listEvacueesForCenters,
+  listEvidenceForReport,
   listIdDocumentsForReview,
   listInvitations,
   listPublishedAdviceWithSteps,
@@ -101,11 +102,13 @@ import {
   updateUserRole,
   uploadAdviceStepImage,
   uploadEvidence,
+  recordEvidenceUploadFailure,
   upsertCenter,
   verifyLocalCredentials,
   getUserByEmail,
   verifyUserTotp,
 } from "./db";
+import { accessDenialReason, canAccessReport } from "./report-access";
 import { broadcastAlert, broadcastAssignment, broadcastIncident } from "./_core/realtime";
 import { toCitizenEmergencyNotification } from "../shared/citizen";
 import {
@@ -1360,20 +1363,113 @@ export const appRouter = router({
     }),
     weather: roleProcedure(allowedRoles).query(() => getWeatherSnapshot()),
     emergencySms: publicProcedure.query(() => getPublicSmsSettings()),
+    /**
+     * US-5, part 1: the resident's photograph reaches storage.
+     *
+     * Note what is NOT in the input: a mime type. The client no longer gets to
+     * assert what a file is. `uploadEvidence` reads the type from the bytes and
+     * refuses anything it does not recognise, which is the only form of the
+     * "re-validate true mime type" rule that cannot be talked around — see
+     * `server/file-signature.ts` for why this matters more than it looks.
+     */
     uploadEvidence: protectedProcedure
       .input(
         z.object({
           reportId: z.number().int().positive(),
           fileName: z.string().min(1).max(255),
-          mimeType: z.string().min(3).max(120),
           dataBase64: z.string().min(1),
         })
       )
       .mutation(async ({ ctx, input }) => {
         const report = await getRiskReportById(input.reportId);
-        const canAccess = ctx.user.role === "admin" || report?.reporterId === ctx.user.id || report?.assignedResponderId === ctx.user.id;
-        if (!canAccess) throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this report." });
-        return uploadEvidence({ ...input, userId: ctx.user.id });
+        if (!report)
+          throw new TRPCError({ code: "NOT_FOUND", message: "That report no longer exists." });
+        if (!canAccessReport(ctx.user, report))
+          throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this report." });
+        try {
+          return await uploadEvidence({ ...input, userId: ctx.user.id });
+        } catch (error) {
+          /**
+           * US-7 AC 4. If nothing is written here, a failed upload is
+           * indistinguishable from one never attempted — a report that looks
+           * un-evidenced when the resident did take a photo and it did not
+           * arrive. `recordEvidenceUploadFailure` leaves a row the responder's
+           * gallery renders as failed, and the resident's own screen is already
+           * telling them why. Both writes are best-effort: the original error
+           * is the one the caller sees, whatever happens to the record.
+           */
+          try {
+            await recordEvidenceUploadFailure({
+              reportId: input.reportId,
+              fileName: input.fileName,
+            });
+            await logActivity({
+              actorId: ctx.user.id,
+              action: "EVIDENCE_UPLOAD_FAILED",
+              entityType: "risk_report",
+              entityId: input.reportId,
+              metadata: JSON.stringify({
+                fileName: input.fileName,
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            });
+          } catch {
+            // Failure recording must not mask the original failure.
+          }
+          throw error;
+        }
+      }),
+
+    /**
+     * US-7, part 1: the read path that did not exist before this change.
+     *
+     * Until now `evidenceFiles` had exactly one statement against it anywhere in
+     * the codebase and it was an insert. Files went in and nothing in the
+     * product — no query, no screen, no export — could ever bring one back out.
+     * An upload with no way to view it records an incident without preserving
+     * any of its evidence, which is worse than not having the feature, because
+     * it looks like it works.
+     *
+     * Returns `url` pointing at the authenticated serving route rather than the
+     * `fileUrl` column. That column holds an unsigned `/api/upload/...` path
+     * which returns 403 for every request; handing it to a client would be
+     * handing over a link that cannot be fetched.
+     *
+     * Center staff are excluded by `canAccessReport`, per US-7 as written and
+     * the decision in section 12.3. The consequence — staff see a report with
+     * no attachments under it — is documented on that function rather than
+     * rediscovered here.
+     */
+    listEvidence: protectedProcedure
+      .input(z.object({ reportId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        const report = await getRiskReportById(input.reportId);
+        if (!report)
+          throw new TRPCError({ code: "NOT_FOUND", message: "That report no longer exists." });
+        if (!canAccessReport(ctx.user, report)) {
+          await logActivity({
+            actorId: ctx.user.id,
+            action: "EVIDENCE_ACCESS_DENIED",
+            entityType: "risk_report",
+            entityId: input.reportId,
+            metadata: JSON.stringify({
+              reason: accessDenialReason(ctx.user),
+              requesterRole: ctx.user.role,
+            }),
+          });
+          throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this report." });
+        }
+        const rows = await listEvidenceForReport(input.reportId);
+        return rows.map((row) => ({
+          id: row.id,
+          reportId: row.reportId,
+          fileName: row.fileName,
+          status: row.status === "FAILED" ? ("FAILED" as const) : ("STORED" as const),
+          mimeType: row.mimeType || null,
+          sizeBytes: row.sizeBytes,
+          createdAt: row.createdAt,
+          url: row.status === "STORED" ? `/api/files/evidence/${row.id}` : null,
+        }));
       }),
   }),
   advice: router({

@@ -1,0 +1,1 @@
+ALTER TABLE `evidence_files` ADD `status` varchar(16) DEFAULT 'STORED' NOT NULL;

@@ -40,6 +40,16 @@ export interface StorageBackend {
     data: Buffer | Uint8Array | string,
     contentType?: string,
   ): Promise<StoredObject>;
+  /**
+   * Reads the object's bytes.
+   *
+   * Exists so the authenticated file route in `server/_core/fileRoutes.ts` can
+   * stream after it has checked identity, authorization and written an audit
+   * row. Without it the only way to return a file would be to mint a signed
+   * URL, which hands the caller a bearer token that outlives the authorization
+   * check that justified it.
+   */
+  get(relKey: string): Promise<Buffer>;
   getSignedUrl(relKey: string, ttlSeconds?: number): Promise<string>;
   delete(relKey: string): Promise<void>;
 }
@@ -168,6 +178,12 @@ function createVolumeBackend(): StorageBackend {
       await fs.writeFile(target, data);
       return { key, url: `/api/upload/${encodeKey(key)}` };
     },
+    async get(relKey) {
+      // `normalizeKey` rejects `..`, and `resolveWithinRoot` re-checks the
+      // containment: the last thing standing between a database value and an
+      // arbitrary file read.
+      return fs.readFile(resolveWithinRoot(normalizeKey(relKey)));
+    },
     async getSignedUrl(relKey, ttlSeconds = SIGNED_URL_TTL_SECONDS) {
       const key = normalizeKey(relKey);
       const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds;
@@ -217,6 +233,14 @@ function createS3Backend(): StorageBackend {
         }),
       );
       return { key, url: `s3://${bucket}/${key}` };
+    },
+    async get(relKey) {
+      const key = normalizeKey(relKey);
+      const result = await client.send(
+        new GetObjectCommand({ Bucket: bucket, Key: key }),
+      );
+      if (!result.Body) throw new Error("S3 object has an empty body");
+      return Buffer.from(await result.Body.transformToByteArray());
     },
     async getSignedUrl(relKey, ttlSeconds = SIGNED_URL_TTL_SECONDS) {
       const key = normalizeKey(relKey);
@@ -279,6 +303,14 @@ export function storagePut(
 
 export function storageGetSignedUrl(relKey: string, ttlSeconds?: number): Promise<string> {
   return getStorage().getSignedUrl(relKey, ttlSeconds);
+}
+
+/**
+ * Reads a stored object's bytes, for routes that have already authorized the
+ * caller. Contrast `storageGetSignedUrl`, which produces a bearer token.
+ */
+export function storageGet(relKey: string): Promise<Buffer> {
+  return getStorage().get(relKey);
 }
 
 /**

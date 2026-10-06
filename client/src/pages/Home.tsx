@@ -165,6 +165,22 @@ type WorkspaceResource = {
   centerId: number;
   status: string;
 };
+/**
+ * Whether a browser can render this attachment inline as an image.
+ *
+ * HEIC (an iPhone's default) and PDF are valid, storable evidence and are
+ * served by the authenticated route, but neither renders in an <img>, so they
+ * are shown as download links instead of thumbnails.
+ */
+function isInlineRenderable(mimeType: string | null): boolean {
+  return (
+    mimeType === "image/jpeg" ||
+    mimeType === "image/png" ||
+    mimeType === "image/gif" ||
+    mimeType === "image/webp"
+  );
+}
+
 type WorkspaceReport = {
   id: number;
   reportCode: string;
@@ -370,9 +386,16 @@ export default function Home() {
     { reportId: selectedIncidentReportId ?? 0 },
     { enabled: selectedIncidentReportId !== null && !isStaticSession() }
   );
+  const { data: evidenceRows, isLoading: evidenceLoading, error: evidenceQueryError } = trpc.operations.listEvidence.useQuery(
+    { reportId: selectedIncidentReportId ?? 0 },
+    { enabled: selectedIncidentReportId !== null && !isStaticSession() }
+  );
   const utils = trpc.useUtils();
   const uploadEvidenceMutation = trpc.operations.uploadEvidence.useMutation({
-    onSuccess: () => utils.operations.reports.invalidate(),
+    onSuccess: () => {
+      utils.operations.reports.invalidate();
+      utils.operations.listEvidence.invalidate();
+    },
   });
   const createReportMutation = trpc.operations.createRiskReport.useMutation({
     onSuccess: () => setSubmitted(true),
@@ -690,7 +713,6 @@ export default function Home() {
         uploadEvidenceMutation.mutate({
           reportId: created.id,
           fileName: evidenceFile.name,
-          mimeType: evidenceFile.type || "application/octet-stream",
           dataBase64,
         });
       }
@@ -1422,6 +1444,54 @@ export default function Home() {
                 {incidentTimeline?.actions.map(action => <div className="incident-timeline-event" key={action.id}><span className="incident-timeline-dot" /><div><strong>{action.action}</strong><small>{new Date(action.createdAt).toLocaleString()}</small>{action.resourcesUsed && <p>Resources used: {action.resourcesUsed}</p>}{action.arrivalAt && <p>Arrived: {new Date(action.arrivalAt).toLocaleString()}</p>}{action.completedAt && <p>Completed: {new Date(action.completedAt).toLocaleString()}</p>}</div></div>)}
                 {selectedIncident.status === "RESOLVED" && <div className="incident-timeline-event"><span className="incident-timeline-dot complete" /><div><strong>Incident resolved</strong><small>Resolution recorded</small>{selectedIncident.resolution && <p>{selectedIncident.resolution}</p>}</div></div>}
               </div>
+            </div>
+            <div className="incident-evidence">
+              <div className="incident-evidence-head">
+                <span className="eyebrow">ATTACHMENTS</span>
+                <h3>Photos and documents</h3>
+                {evidenceLoading && <LoaderCircle className="login-spinner" size={17} aria-label="Loading attachments" />}
+              </div>
+              {!evidenceQueryError && (evidenceRows ?? []).length === 0 && (
+                <p className="incident-evidence-empty">No photos or documents attached.</p>
+              )}
+              {!evidenceQueryError && (evidenceRows ?? []).length > 0 && (
+                /*
+                  US-7 AC 4, the responder's half. An upload that failed while
+                  the resident had a connection came home as a FAILED row (see
+                  `recordEvidenceUploadFailure`); it is listed here rather than
+                  silently absent, so nobody mistakes it for evidence that was
+                  never offered.
+                */
+                <ul className="evidence-gallery">
+                  {evidenceRows?.map(row =>
+                    row.status === "FAILED" ? (
+                      <li key={row.id} className="evidence-item evidence-failed" role="status">
+                        <span className="evidence-name">{row.fileName}</span>
+                        <span className="evidence-state">Not received — the resident may still be sending it</span>
+                      </li>
+                    ) : row.url && isInlineRenderable(row.mimeType) ? (
+                      <li key={row.id} className="evidence-item evidence-image">
+                        {/* The route serves bytes only after authenticating the
+                            session, so a plain <img> to it works without any
+                            separate token or expiration. */}
+                        <a href={row.url} target="_blank" rel="noopener noreferrer" className="evidence-thumb" aria-label={`Open ${row.fileName}`}>
+                          <img src={row.url} alt={row.fileName} loading="lazy" />
+                        </a>
+                        <span className="evidence-name">{row.fileName}</span>
+                      </li>
+                    ) : row.url ? (
+                      <li key={row.id} className="evidence-item evidence-document">
+                        <a href={row.url} target="_blank" rel="noopener noreferrer" download={row.fileName}>
+                          {row.fileName}
+                        </a>
+                        <span className="evidence-state">
+                          {row.mimeType === "application/pdf" ? "PDF" : "Document"}
+                        </span>
+                      </li>
+                    ) : null
+                  )}
+                </ul>
+              )}
             </div>
             <div className="incident-assignment">
               <div className="incident-assignment-head">

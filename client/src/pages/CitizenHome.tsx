@@ -4,9 +4,11 @@ import {
   AlertOctagon,
   Bell,
   Building2,
+  Camera,
   CheckCircle2,
   ChevronRight,
   CloudRain,
+  ImagePlus,
   LogOut,
   MapPin,
   PhoneCall,
@@ -21,6 +23,15 @@ import { Input } from "@/components/ui/input";
 import { startLogin } from "@/const";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
+import {
+  classifyAttachments,
+  hasOutstanding,
+  MAX_ATTACHMENTS,
+  uploadPending,
+  type Attachment,
+  type AttachmentRejection,
+  type EvidenceSend,
+} from "@/lib/reportEvidence";
 import RoleOnboarding from "@/components/RoleOnboarding";
 import { getStaticSession } from "@/lib/staticAuth";
 import "leaflet/dist/leaflet.css";
@@ -264,6 +275,7 @@ export default function CitizenHome() {
   const [cachedAdvice, setCachedAdvice] = useState<CitizenAdviceRow[]>(readCachedAdvice);
   const { data: smsConfig } = trpc.operations.emergencySms.useQuery();
   const createReportMutation = trpc.operations.createRiskReport.useMutation();
+  const evidenceMutation = trpc.operations.uploadEvidence.useMutation();
   const [reportOpen, setReportOpen] = useState(false);
   const [centerSearch, setCenterSearch] = useState("");
   const [reportText, setReportText] = useState("");
@@ -286,6 +298,30 @@ export default function CitizenHome() {
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [submitMode, setSubmitMode] = useState<"sent" | "queued">("sent");
   const [submitError, setSubmitError] = useState("");
+
+  /**
+   * US-5 photo attachments.
+   *
+   * `attachmentsRef` mirrors `attachments` because the upload path reads it
+   * from callbacks that outlive the render they were created in — an
+   * `onSuccess`, an `online` listener, and the offline queue flush all run
+   * later, against whatever state was current then. Reading state directly in
+   * any of those is how a retry ends up uploading a stale list. The ref is the
+   * source of truth for sending; the state exists so React redraws.
+   */
+  const attachmentsRef = useRef<Attachment[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<AttachmentRejection | "">("");
+  /**
+   * Non-null once a report exists and at least one photo still owes. It is
+   * both the id the retry needs and the flag that decides whether the resident
+   * is shown "Report sent — photo pending".
+   */
+  const [pendingReportId, setPendingReportId] = useState<number | null>(null);
+  /** The report was queued offline and is holding photos for the flush. */
+  const [queuedWithPhotos, setQueuedWithPhotos] = useState(false);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
+  const galleryInputRef = useRef<HTMLInputElement | null>(null);
   const [cachedCenters, setCachedCenters] = useState<CitizenCenterRow[]>(() => {
     try {
       const raw = window.localStorage.getItem("likas-cached-centers");
@@ -487,9 +523,10 @@ export default function CitizenHome() {
       offlineSyncingRef.current = true;
       try {
         const remaining = parseOfflineReports(raw);
+        let photosAttached = false;
         while (remaining.length) {
           const queued = remaining[0];
-          await createReportMutation.mutateAsync({
+          const created = await createReportMutation.mutateAsync({
             reportCode: `CIT-${Date.now()}-${remaining.length}`,
             reportType: "Citizen emergency",
             description: queued.reportText,
@@ -499,6 +536,28 @@ export default function CitizenHome() {
             priority: "HIGH",
           });
           remaining.shift();
+          /**
+           * US-5 AC 6, the other half of it. A report queued while offline only
+           * really exists now, and an upload hangs off a report id — so this is
+           * the only moment photos picked before the connection dropped can be
+           * attached to it.
+           *
+           * Guarded by a flag local to this run rather than by `pendingReportId`
+           * because this effect closes over `[user]` and would otherwise read a
+           * stale value. Once a run has handed its photos to a report they are
+           * either sent or belong to that report, so a later report in the same
+           * queue must not inherit them.
+           */
+          if (
+            !photosAttached &&
+            created?.id != null &&
+            hasOutstanding(attachmentsRef.current)
+          ) {
+            photosAttached = true;
+            setQueuedWithPhotos(false);
+            setPendingReportId(created.id);
+            await runPhotoUploads(created.id);
+          }
           if (remaining.length)
             window.localStorage.setItem("likas-offline-reports", JSON.stringify(remaining));
           else {
@@ -516,6 +575,30 @@ export default function CitizenHome() {
     if (navigator.onLine) void syncQueued();
     return () => window.removeEventListener("online", syncQueued);
   }, [user]);
+
+  /**
+   * US-5 AC 6: the photo retries itself when the connection comes back.
+   *
+   * Separate from the queue flush above because these are different failures.
+   * The queue holds reports that were never created; this holds a report that
+   * exists and photographs that did not arrive. Reading `attachmentsRef` and
+   * `pendingReportId` from the closure is deliberate — a listener installed
+   * once and torn down on change sees the values as they were when it was
+   * installed, which for a state pair updated together is exactly right.
+   */
+  useEffect(() => {
+    if (pendingReportId == null) return;
+    const retryPhotos = () => {
+      if (!hasOutstanding(attachmentsRef.current)) return;
+      void runPhotoUploads(pendingReportId);
+    };
+    window.addEventListener("online", retryPhotos);
+    return () => window.removeEventListener("online", retryPhotos);
+    // `runPhotoUploads` is redefined every render but only touches refs and
+    // setters, so re-subscribing on `pendingReportId` alone keeps this honest
+    // without churning the listener on every keystroke in the report box.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingReportId]);
   function showDirections(center: {
     latitude: string | number;
     longitude: string | number;
@@ -544,6 +627,74 @@ export default function CitizenHome() {
     await logout();
     window.location.href = "/login";
   }
+  /** Replaces the attachment list in both the ref and React's view of it. */
+  function commitAttachments(next: Attachment[]) {
+    attachmentsRef.current = next;
+    setAttachments(next);
+  }
+
+  /** Maps a rejection code onto the resident's language. */
+  function attachmentRejectionCopy(code: AttachmentRejection): string {
+    if (code === "TOO_LARGE") return t.photoTooLarge;
+    if (code === "TOO_MANY") return t.tooManyPhotos;
+    return t.photoUnsupported;
+  }
+
+  /**
+   * Adds whatever the resident just picked, keeping the order they picked it
+   * in and reporting the first refusal as a code for the copy to translate.
+   */
+  function addChosenFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const { accepted, rejected } = classifyAttachments(
+      Array.from(files),
+      attachmentsRef.current,
+    );
+    if (accepted.length > 0) {
+      commitAttachments([...attachmentsRef.current, ...accepted]);
+      setAttachmentError("");
+    }
+    if (rejected.length > 0) setAttachmentError(rejected[0]);
+  }
+
+  function removeAttachment(id: string) {
+    setAttachmentError("");
+    commitAttachments(attachmentsRef.current.filter(item => item.id !== id));
+  }
+
+  /**
+   * The concrete `EvidenceSend`. One line, and the only place in the client
+   * that knows photos travel as base64 inside a tRPC call — see
+   * `client/src/lib/reportEvidence.ts`.
+   */
+  const sendEvidence: EvidenceSend = ({ reportId, fileName, dataBase64 }) =>
+    evidenceMutation.mutateAsync({ reportId, fileName, dataBase64 });
+
+  /**
+   * Sends whatever is outstanding for a report and updates the pending flag
+   * from the result.
+   *
+   * Files already `sent` are skipped by `uploadPending`, so a retry after a
+   * dropped connection resumes where it stopped instead of uploading the same
+   * photograph twice into a resident's incident record.
+   */
+  async function runPhotoUploads(reportId: number) {
+    if (!hasOutstanding(attachmentsRef.current)) {
+      setPendingReportId(null);
+      return;
+    }
+    commitAttachments(
+      attachmentsRef.current.map(item =>
+        item.status === "sent" ? item : { ...item, status: "uploading" as const },
+      ),
+    );
+    const next = await uploadPending(reportId, attachmentsRef.current, sendEvidence);
+    commitAttachments(next);
+    const stillWaiting = hasOutstanding(next);
+    setPendingReportId(stillWaiting ? reportId : null);
+    if (!stillWaiting) setQueuedWithPhotos(false);
+  }
+
   function submitReport() {
     if (
       !reportText.trim() ||
@@ -564,6 +715,7 @@ export default function CitizenHome() {
       );
       setSubmitMode("queued");
       setSubmitted(true);
+      setQueuedWithPhotos(hasOutstanding(attachmentsRef.current));
       speakText(t.queued, speechLanguage);
       return;
     }
@@ -598,10 +750,20 @@ export default function CitizenHome() {
         priority: "HIGH",
       },
       {
-        onSuccess: () => {
+        onSuccess: created => {
           setSubmitMode("sent");
           setSubmitted(true);
           speakText(t.sent, speechLanguage);
+          /**
+           * US-5 AC 6. The report exists now, so the photos have somewhere to
+           * go — and if any of them fail the resident is shown a pending state
+           * rather than a false success, because the alternative is a report
+           * that looks evidenced and is not.
+           */
+          if (created?.id != null && attachmentsRef.current.length > 0) {
+            setPendingReportId(created.id);
+            void runPhotoUploads(created.id);
+          }
         },
         onError: (error) => {
           // Network/offline error — queue for retry
@@ -621,6 +783,7 @@ export default function CitizenHome() {
             );
             setSubmitMode("queued");
             setSubmitted(true);
+            setQueuedWithPhotos(hasOutstanding(attachmentsRef.current));
             speakText(t.queued, speechLanguage);
           } else {
             // Server error — show the real error message
@@ -1161,10 +1324,61 @@ export default function CitizenHome() {
                     {t.sendSms}
                   </a>
                 )}
+                {/*
+                  US-5 AC 6, made visible. The report reached responders, the
+                  photographs did not, and saying "Report sent" without
+                  qualifying it would leave a resident believing an incident
+                  record carries evidence that is not there. Every attachment
+                  is listed with its own state so nothing is silently missing.
+                */}
+                {pendingReportId != null && (
+                  <div className="citizen-photo-pending" role="status">
+                    <strong>{t.photoPending}</strong>
+                    <p>{t.photoPendingHelp}</p>
+                    <ul className="citizen-attach-list">
+                      {attachments.map(item => (
+                        <li key={item.id}>
+                          <span className="citizen-attach-name">{item.file.name}</span>
+                          <span className={`citizen-photo-state ${item.status}`}>
+                            {item.status === "sent"
+                              ? t.photoSent
+                              : item.status === "uploading"
+                                ? t.sendingPhotos
+                                : t.photoPending}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={
+                        !isOnline ||
+                        attachments.some(item => item.status === "uploading")
+                      }
+                      onClick={() => void runPhotoUploads(pendingReportId)}
+                    >
+                      {t.retryPhotos}
+                    </Button>
+                  </div>
+                )}
+                {pendingReportId == null && queuedWithPhotos && attachments.length > 0 && (
+                  <p className="citizen-photo-note" role="status">
+                    {t.photosQueued}
+                  </p>
+                )}
                 <Button
                   onClick={() => {
                     setSubmitted(false);
                     setReportOpen(false);
+                    // Held photos are only dropped once the resident is done
+                    // and nothing still owes. Discarding them while an upload
+                    // is outstanding would undo exactly what AC 6 promises.
+                    if (!hasOutstanding(attachmentsRef.current)) {
+                      commitAttachments([]);
+                      setAttachmentError("");
+                      setQueuedWithPhotos(false);
+                    }
                   }}
                 >
                   {t.done}
@@ -1201,6 +1415,94 @@ export default function CitizenHome() {
                   />
                 </label>
                 {locationPickerOpen && <CitizenLocationPicker latitude={reportLatitude} longitude={reportLongitude} onPick={(latitude, longitude) => { setReportLatitude(latitude); setReportLongitude(longitude); setLocation(`Pinned location: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`); }} />}
+                <div className="citizen-attachments">
+                  <span className="citizen-input-label">{t.attachPhoto}</span>
+                  <p className="citizen-attach-help">{t.attachHelp}</p>
+                  {/*
+                    Two controls rather than one with `capture` set. `capture`
+                    opens the camera directly but throws away the option to
+                    pick from the library, which acceptance criterion 2 asks
+                    for: offered the camera, and still able to choose. Splitting
+                    gives both, and the second accepts a PDF as well because
+                    evidence is not always a photograph.
+                  */}
+                  <div className="citizen-attach-buttons">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={attachments.length >= MAX_ATTACHMENTS}
+                      onClick={() => cameraInputRef.current?.click()}
+                    >
+                      <Camera size={16} /> {t.takePhoto}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={attachments.length >= MAX_ATTACHMENTS}
+                      onClick={() => galleryInputRef.current?.click()}
+                    >
+                      <ImagePlus size={16} /> {t.choosePhotos}
+                    </Button>
+                  </div>
+                  <input
+                    ref={cameraInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    hidden
+                    onChange={event => {
+                      addChosenFiles(event.target.files);
+                      event.target.value = "";
+                    }}
+                  />
+                  <input
+                    ref={galleryInputRef}
+                    type="file"
+                    accept="image/*,application/pdf"
+                    multiple
+                    hidden
+                    onChange={event => {
+                      addChosenFiles(event.target.files);
+                      event.target.value = "";
+                    }}
+                  />
+                  {attachmentError && (
+                    <p className="citizen-input-error" role="alert">
+                      {attachmentRejectionCopy(attachmentError)}
+                    </p>
+                  )}
+                  {!isOnline && attachments.length > 0 && (
+                    <p className="citizen-input-error" role="status">
+                      {t.photosQueued}
+                    </p>
+                  )}
+                  {attachments.length > 0 && (
+                    <ul className="citizen-attach-list">
+                      {attachments.map(item => (
+                        <li key={item.id}>
+                          <span className="citizen-attach-name">{item.file.name}</span>
+                          <span className={`citizen-photo-state ${item.status}`}>
+                            {item.status === "sent"
+                              ? t.photoSent
+                              : item.status === "uploading"
+                                ? t.sendingPhotos
+                                : t.photoPending}
+                          </span>
+                          {/* Only reachable before submitting: the form is
+                              replaced by the confirmation once the report is
+                              sent, which is what acceptance criterion 4 asks. */}
+                          <button
+                            type="button"
+                            aria-label={t.removePhoto}
+                            onClick={() => removeAttachment(item.id)}
+                          >
+                            <X size={14} />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
                 <div className="citizen-modal-actions">
                   <Button
                     variant="outline"

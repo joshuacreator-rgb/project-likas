@@ -57,6 +57,8 @@ Two tables will be added for US-2/US-3 in a future wave:
 
 **Storage decision, not yet recorded as code:** ID images must **not** be served from the public `/manus-storage/{key}` proxy that `storagePut` returns (`server/storage.ts:71`). An authenticated serving route with an authorization check and an audit-log write is required. This applies to US-10's step photos too in principle, though those are not personal documents and the risk is lower.
 
+> **Correction (2026-10-06):** the `/manus-storage` proxy no longer exists (removed in `b0db704c`). `storagePut` now returns an `/api/upload/{key}?exp&sig` capability URL — HMAC-signed from `JWT_SECRET`, 403 without a valid signature. ID serving is implemented: `idVerification.imageUrl` (admin/staff, center-scoped, 300-second signed URL, `ID_DOCUMENT_VIEWED` audit row). See §12.2.
+
 ### 2.2 Pre-existing issues found during review
 
 | Issue | Location | Impact on this backlog |
@@ -93,6 +95,8 @@ Under the Philippine Data Privacy Act (RA 10173), storing a government ID requir
 - Serving through an **authenticated, authorization-checked route**
 
 Note: `server/storage.ts:71` returns `/manus-storage/${key}`, a proxy path. **Valid IDs must not be served this way.** The existing evidence flow uses this pattern and is not safe to reuse for IDs as-is.
+
+> **Correction (2026-10-06):** `server/storage.ts` no longer returns `/manus-storage`. It returns an HMAC-signed `/api/upload/{key}?exp&sig` capability URL that answers 403 unsigned or forged. See §12.2.
 
 ---
 
@@ -202,6 +206,8 @@ so that the Municipality can confirm my identity and residency.
 
 **Notes**
 - **Do not reuse `operations.uploadEvidence` as-is.** It is scoped to `risk_reports`, allows any authenticated user, and returns a publicly proxyable `/manus-storage/{key}` URL
+
+  > **Correction (2026-10-06):** no proxy URL exists any more. `uploadEvidence` returns `/api/files/evidence/{id}`, the authenticated streaming route (US-5/7, §12.3); the stored `fileUrl` is an unsigned path that 403s and is never returned to a client. See §12.2.
 - **Requires new table**, e.g. `citizen_id_documents` (userId, fileKey, idType, idNumberMasked, addressOnId, status, reviewedBy, reviewedAt, rejectionReason, purgeAfter)
 - **Builds on**: `storagePut` in `server/storage.ts` (S3 via Forge presign)
 - **`purgeAfter` carries the retention date** from section 5.1, so the cleanup job is a single indexed scan rather than a date calculation per row
@@ -268,6 +274,8 @@ so that I only approve residents of Pateros and reject everyone else.
 - **Builds on**: existing `admin.updateUserApproval` (Approve/Decline at `Home.tsx:2243`) and the `activity_logs` table
 - **Business rules**: `updateUserApproval` already rejects non-citizen targets — reuse that guard
 - **Security requirement**: IDs must be served through an authenticated, authorization-checked route — **not** the public `/manus-storage/{key}` proxy (`server/storage.ts:71`). This is a hard requirement, not a preference: a publicly fetchable URL for a government ID belonging to a named resident is not acceptable under any retention policy.
+
+  > **Correction (2026-10-06):** the requirement is met — IDs are served only through `idVerification.imageUrl` (admin/staff, center-scoped, 300-second signed URL, `ID_DOCUMENT_VIEWED` audit). The proxy it warned about no longer exists. See §12.2.
 - **Center scoping is open** — see 5.2(b). Recommended: staff see only applicants assigned to their own centre.
 - **Staff delete rights are open** — see 5.2(c). Recommended: staff approve and decline only; deleting the ID record stays admin-only.
 - **Out of scope**: bulk approval, OCR of the ID number or address (see US-4). Staff read the address from the image themselves in Wave 1.
@@ -763,6 +771,8 @@ The 10–13 day estimate for Wave 1 assumed a single reviewer role and an undeci
 - **Center Staff gained review rights** (OQ 7). `updateUserApproval` is currently `adminProcedure`; admitting `staff` means a new authorization tier, per-centre scoping, and its own test coverage.
 - **Retention became a requirement** (OQ 3). Two tiers plus a scheduled purge job, with `purgeAfter` set at write time so cleanup is an indexed scan.
 - **IDs must not be publicly fetchable.** `storagePut` returns a `/manus-storage/{key}` proxy URL (`server/storage.ts:71`). Storing government IDs through that path is not acceptable, so an authenticated, authorization-checked, audit-logging serving route is required.
+
+  > **Correction (2026-10-06):** the serving route exists — `idVerification.imageUrl` (300-second signed URL, `ID_DOCUMENT_VIEWED` audit). See §12.2.
 
 Wave 1 should be re-estimated once the three sub-decisions in 5.2 are settled. A preliminary figure is **13–17 days**, up from 10–13 — the retention and audit work is new scope, not a refinement of the original estimate.
 
@@ -1392,3 +1402,88 @@ The working rule for this project is that a pre-push secret scan is required, be
 The scan as run by hand covered tracked files against ten patterns, JWTs, common API key prefixes, private key blocks, `JWT_SECRET` and `DATABASE_URL` assignments, password assignments, and connection strings with embedded credentials. The diff of the three commits pushed this session was clean. Every working-tree hit was a test fixture, an empty `.env.example` value, or documentation text, with 11.14 the one item that was neither and is assessed separately above.
 
 **Recommendation: promote the ad-hoc scan to `scripts/scan-secrets.mjs` and wire it to `scripts/deploy-staging.ps1`, which already refuses to deploy when a gate fails.** The value is not the first run, which has now happened, but that the next run happens without anyone remembering to do it. This is the same shape as 11.9 and 11.13: a safeguard that depends on someone remembering is not a safeguard. Cost is about half a day. Awaiting approval before any code is written.
+
+---
+
+## 12. Next unit: US-5 + US-7 + the authenticated serving route
+
+**Recorded 2026-10-06. The November deadline is formally dropped as a sequencing constraint.** Items are now ordered by what produces a correct system, not by what fits the remaining calendar. Estimates below were previously given as ranges to fit a deadline and are given as plain effort instead.
+
+### 12.1 Why this unit, established by inspection rather than by the status table
+
+The status table in section 5 says US-5 is "not started, UI is broken today" and US-7 is "not started". Reading the code gives a sharper picture than either.
+
+**US-5.** `client/src/pages/CitizenHome.tsx` has **no file input at all**. The three `createReportMutation` call sites create a report and nothing else. The backend is not the obstacle: `operations.uploadEvidence` exists, accepts images and PDF, enforces a 10 MB cap, and checks ownership as `admin || report.reporterId === user.id || report.assignedResponderId === user.id`. The admin dashboard at `client/src/pages/Home.tsx:1600` already has a working single-file version of exactly this control, so a reference implementation is in the same codebase. AC 3 asks for three attachments, and the existing control is single-file, so multiple is new work regardless.
+
+**US-7 has no backend at all.** A search of the repository for `evidenceFiles` returns three sites: the schema definition, the import line, and `db.ts:94` where it is inserted into. It is never selected from. There is no list query, no detail query, no read path anywhere. **Evidence in this product is currently write-only.** This is the single most useful fact in this section: US-5 alone would produce files that no human being can ever look at.
+
+**US-6 remains blocked** on OQ 5, which was answered *"kahit ilan second"* and is not implementable as written.
+
+### 12.2 The decision the deadline was making badly
+
+**Correction, added the same day after reading `server/storage.ts` instead of trusting this document.** The requirement stated in section 5 (lines 270 and 765) and in the schema comment at `drizzle/schema.ts:41-44` rests on a description of the storage layer that is no longer true. It says resident files are served from a `/manus-storage/{key}` proxy that anyone can fetch. Measured on live staging: `GET /manus-storage/risk-reports/1/x.jpg` returns **200 with 1226 bytes**, which is the SPA `index.html` — that path is a client route falling through to the shell, not a file server.
+
+The proxy was removed by commit `b0db704c` on 2026-10-03, *`feat(storage): replace unavailable Manus forge storage with volume/S3 backends`*, which deleted `server/_core/storageProxy.ts` and added `server/_core/uploadRoutes.ts`. The backlog was edited by that commit (+43 lines) but every warning written against the removed proxy was left standing, and the schema comment was never updated. **The hard requirement is therefore sound, and its stated justification is stale.**
+
+What the current path actually is, measured rather than assumed:
+
+| Request | Result |
+|---|---|
+| `/manus-storage/{key}` | 200, 1226 bytes, the SPA shell — serves no file |
+| `/api/upload/{key}` unsigned | **403** |
+| `/api/upload/{key}` forged `sig` | **403** |
+
+`storagePut` returns an **unsigned** `/api/upload/{key}`, and `verifyUploadSignature` refuses anything without a valid HMAC over `upload:{key}:{expiresAt}`, compared in constant time. Signed URLs are minted separately by `storageGetSignedUrl`. So the `evidenceFiles.fileUrl` stored today cannot be fetched at all — it is not publicly reachable, it is simply unusable, and nothing discovers this because there is no read path (12.1).
+
+**The requirement still stands, but for a different reason, and the reason changes the design.** What exists is a capability URL: knowledge of the token plus its expiry. What does not exist is *identity* — no session is consulted, no per-user authorization is applied, no audit row records who opened a resident's file, and anyone holding the link can fetch it for the lifetime of the signature. That is the standard presigned-S3 model, and it is adequate for a public advice image. It is not adequate for a government ID or for a resident's emergency photographs, which is what the requirement was reaching for.
+
+So the shared route is justified on authorization and audit grounds rather than on the grounds originally written down. Whatever it returns must not outlive the request.
+
+### 12.3 Agreed scope
+
+Decisions taken 2026-10-06, all three recommended and approved:
+
+| Decision | Agreed |
+|---|---|
+| Next unit | US-5 + US-7 + the authenticated serving route, as one unit |
+| Who may view attachments | US-7 as written: admin, the reporter, and the assigned responder. **Staff excluded**, matching the existing upload rule. Not widened to staff |
+| Serving route | One shared route with a shared authorization helper. Evidence uses it now; US-2/US-3 ID serving inherits it later instead of being built separately |
+
+**In scope**
+
+1. Authenticated serving route with an authorization check and an audit-log write.
+2. `operations.listEvidence(reportId)` — the read path that does not exist, enforcing the rule above.
+3. Citizen photo UI on `CitizenHome.tsx`: multiple attachments, removal before submitting, camera capture on mobile.
+4. US-5 AC 6 — upload failure leaves the report saved and marked pending, with automatic retry. US-7 AC 4 — a failed or pending attachment is shown as such, never silently missing.
+
+**Out of scope**
+
+- **Presigned upload.** Staging storage is a local filesystem behind a proxy, not S3-compatible, so presigned URLs cannot be issued until OQ 13 names a bucket owner. Photos fit the existing base64 path within the 10 MB cap. The client upload is to be written behind a single module so US-6 swaps the transport without rewriting the UI.
+- **US-6 video**, still blocked on OQ 5.
+- **ID document serving**, which inherits the route later but is not implemented here.
+
+### 12.4 The part that would have been cut
+
+AC 6 of US-5 and AC 4 of US-7 are the acceptance criteria a deadline removes first. They are also the two that describe the client's stated target environment: a low-end phone on congested mobile data during a storm, where an upload being interrupted is the expected case rather than the exception. This project has now shipped three defects that only appeared outside the author's machine (11.9, 11.13, and the retry loop in 11.8). Building the failure path as the primary path, and verifying it by making the connection fail on purpose, is the direct application of that rule.
+
+### 12.5 Building US-5/US-7: decisions taken while implementing
+
+**Built and pushed as the US-5/US-7 unit.** The server reading foundation (storage get path, shared access rule, signed-route serving, list/upload operations) was rebuilt in this window differently from the originally shipped shape; see 12.2 and the evidence tests under `server/evidence-*.test.ts` for the deltas. Three decisions were made during implementation and are recorded here because they change behavior or introduce defaults.
+
+**1. US-7 AC 4 required a schema change, approved.** A failed upload used to leave no trace: `uploadEvidence` only wrote a row after storage succeeded, so a responder opening a report could not distinguish "no photo was taken" from "a photo was taken and did not arrive". Three options were presented (migration, defer-AC-4, or encoding state in an empty `fileKey`); the client chose **build it with a migration**. Applied:
+
+- `drizzle/0015_keen_ulik.sql` — `ALTER TABLE evidence_files ADD status varchar(16) DEFAULT 'STORED' NOT NULL` (only this column).
+- `recordEvidenceUploadFailure` writes a FAILED row with no storage key (empty `fileKey`/`fileUrl`/`mimeType`) — the row is a record of an attempt, not a file.
+- `uploadEvidence` deletes FAILED rows matching the same report + sanitised file name before writing STORED, so a retry that finally lands does not leave a phantom failure next to the real file.
+- `openEvidence` refuses anything not STORED with the same 404 it uses for missing files (no oracle), and the FAILED rows are never served.
+- `listEvidence` returns `status` and a `null` `url` for FAILED rows; the responder gallery renders them as "Not received — the resident may still be sending it".
+
+**Migration ordering matters:** the migration must be applied inside the container BEFORE this code deploys, or evidence uploads break (the insert references the new column). The deploy gate (§9.4.3) already sequences migrations before code; this push adds one migration to that list.
+
+**2. Attachment cap of five is an adopted default, not client input.** No acceptance criterion or client message ever stated a maximum; AC 3 asserts three work. An unbounded set of 10 MB files is not defensible, so `reportEvidence.ts` caps at **5 photos/documents per report** (`MAX_ATTACHMENTS`). Recorded here the same way the OQ 9 / OQ 5 / OQ 8 defaults were: adopted, then communicated to the client rather than asked.
+
+**3. Offline photos: held in memory, disclosed, not silently lost.** A queued report's text survives in `localStorage`, but a `File` cannot be serialised there. Photos picked while online and still unsent when the connection drops are held in memory and uploaded the moment the queued report is created on reconnect (`syncQueued`); the resident is told in the confirmation screen to keep the page open. If they close the page first, the photos are lost while the queued report survives — this is stated in the UI rather than hidden. Alternatives (IndexedDB persistence) are deliberately out of scope for this unit.
+
+**4. The stale `/manus-storage` claims in this file and in `drizzle/schema.ts` are corrected.** Section 5 lines 58, 95, 204, 270 and 765 each carry a bracketed correction pointing at 12.2; the schema comment now describes the real capability-URL behaviour and the `idVerification.imageUrl` serving route. The claims are preserved in place so the error history stays readable.
+
+**5. Client architecture note for US-6.** All attachment limits, rejection rules and the status state machine live in `client/src/lib/reportEvidence.ts`, which never touches the tRPC client — `EvidenceSend` is injected. US-6 swaps the transport by changing that sender and nothing else; the UI and the AC 6/AC 4 statuses are already built against the injected seam.
