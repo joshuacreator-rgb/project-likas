@@ -1312,3 +1312,46 @@ The login check randomises the address on every run, because registration and lo
 Running `vitest run` while a Vite dev server or preview server is running causes four files to fail collection with "Hook timed out in 10000ms", and 33 tests to be skipped. This is not a code defect and the suite passes 217 of 217 with nothing else running. It was reproduced twice, deliberately, by running the suite alongside a dev server.
 
 It is recorded because a suite that fails intermittently under load trains people to ignore it, which is how the green-suite problem in 11.8 started. The honest fix is a `hookTimeout` above the default in `vitest.config.ts`, or capping concurrency so collection is not competing with itself. Not done here, because it is a tooling change that should be made deliberately rather than as a side effect of a deploy.
+
+### 11.13 The 1.6 MB entry bundle was React running in development mode
+
+Found while comparing the served bundle against a local build of the same source, which reported different hashes and different sizes. The live bundle was `index-D0Ca16Yr.js` at 1619 KB; the local build of identical source was `index-EBV011ve.js` at 1242 KB.
+
+| | Live | Local |
+|---|---|---|
+| Entry bundle | 1619 KB | 1242 KB |
+| `react.development` present | yes | no |
+| `The above error occurred in the` present | yes | no |
+
+Both strings are React development-only source that Vite's `define` and tree-shaking remove from a production build. Their presence means the bundle was built with React in development mode.
+
+**The cause was never corrected.** Neither `nixpacks.toml` nor `railway.toml` pinned `NODE_ENV` for the build, and the build host's value is development. This was never a code-size problem. The `1.6 MB entry bundle` flag carried in earlier sections of this backlog was this, and no amount of trimming application code would have found it.
+
+**The resident cost.** About 377 KB, roughly 23 percent, of extra transfer on every first load, plus a slower reconciler and development-only warning text. It lands on the exact environment the client named: a low-end phone on congested mobile data during a storm. On a disaster-response application, that is a performance defect, not a cosmetic one.
+
+**This was also the root cause of 11.9.** The first attempt at the 358 KB removal read `process.env.NODE_ENV` in `vite.config.ts`, which evaluated false on this same build host. Fixing the gate by switching to Vite's `command` parameter addressed the symptom while leaving the underlying environment wrong, which is why this was found afterwards by comparing bundle hashes rather than by the fix that was supposed to solve it.
+
+**The first fix did not work, and the reason it did not work is the more useful part of this record.** The setting was pinned in `nixpacks.toml`:
+
+```
+[phases.build]
+cmds = ["NODE_ENV=production pnpm build"]
+```
+
+Deploying that produced an unchanged bundle: the same hash `index-D0Ca16Yr.js` at the same 1619 KB, with development React still present. An identical hash from a changed configuration means the changed configuration was never executed.
+
+**Railway does not read `nixpacks.toml`.** The build log settles it. This file specifies `pnpm install --no-frozen-lockfile` in the install phase, and the log shows the build ran `pnpm install --frozen-lockfile --prefer-offline`. The build phase here specifies `NODE_ENV=production pnpm build`, and the log shows `pnpm run build`. Railway is performing its own framework detection from `package.json` and ignoring this file entirely. `nixpacks.toml` has been misconfigured, or simply unused, for some unknown length of time, and nothing in the repository previously recorded which configuration the build actually uses.
+
+**The effective fix** pins it in the script Railway actually executes, using `cross-env`, which is already a devDependency and is already used by the `dev` and `start` scripts:
+
+```json
+"build": "cross-env NODE_ENV=production vite build && esbuild server/_core/index.ts ..."
+```
+
+`build` was the only script that did not pin `NODE_ENV`: `dev` pins development and `start` pins production. `cross-env` matters because the repository is built on Windows as well as on the Linux build host, and a bare `NODE_ENV=production` prefix is a POSIX shell assignment that does not work there.
+
+`nixpacks.toml` was left with the correct setting rather than reverted, but with a prominent header stating that the file is not read, so that nobody reads it and believes the build is pinned. A configuration file claiming an effect it does not have is the same failure as the `validId` comment in 10.4, which is why it was corrected rather than deleted.
+
+**A gate check was added** asserting the served bundle contains no React development-mode markers. It was validated against the live build while the defect was still present, where it failed 9 of 10 and named both markers. That ordering matters: a check only ever seen passing is worth nothing, which is precisely the lesson from 11.9.
+
+**Limits of this record.** The fix was confirmed locally by building with the environment variable absent from the shell, which still produced a production bundle at 1241.9 KB with neither marker present, and by the gate against the live build. The Linux build host cannot be reproduced locally, so Railway's detection behaviour was established from the build log rather than from the deploy result. The `nixpacks.toml` phase in the repository also remains unverified in the sense that it is inert: if Railway later honours it, both settings are already correct, but no deploy in this backlog has exercised that path. If development React reappears, the fallback is to set `NODE_ENV` in the Railway dashboard as a service environment variable, which is the user's action under the standing rule that configuration lives there rather than in the repository. Note that as a runtime variable it would not reach the bundler at all, so it would fix nothing; it has to be set where the build command runs, or in `package.json`.

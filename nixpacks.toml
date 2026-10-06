@@ -1,26 +1,39 @@
+# THIS FILE IS CURRENTLY NOT READ BY THE BUILD.
+#
+# Confirmed from the Railway build log: the install phase ran
+# `pnpm install --frozen-lockfile --prefer-offline` while this file specifies
+# `--no-frozen-lockfile`, and the build phase ran `pnpm run build` rather than the
+# command below. Railway is doing its own framework detection from package.json
+# and ignoring this file entirely.
+#
+# The settings are kept correct here rather than deleted, so that they are already
+# right if Railway ever honours this file. Do NOT take them as evidence of what the
+# build does. The effective NODE_ENV pin lives in package.json's build script.
+#
+# Why that pin exists: NODE_ENV was unset for the build and the build host's value
+# is development, which caused two shipped defects from one root cause:
+#
+#   - The entry bundle went out with React in development mode: 1619 KB against
+#     1242 KB for the same source built in production mode. That is ~377 KB of
+#     extra transfer plus a slower reconciler, landing on the low-end phone over
+#     congested data that the client named as the target. This is what the
+#     "1.6 MB entry bundle" flag in the backlog actually was - never a code-size
+#     problem.
+#   - vite.config.ts decided whether to inject a 358 KB inline script by reading
+#     process.env.NODE_ENV. On the build host that read false, so the plugin was
+#     included and the runtime shipped to every resident.
+#
+# Node-version reference: pnpm install runs after pnpm add -g node-gyp here, which
+# is what Railway's detected install does.
+
 [phases.setup]
 nixPkgs = ["nodejs_20", "nodePackages.pnpm"]
 
 [phases.install]
 cmds = ["pnpm install --no-frozen-lockfile"]
 
-# NODE_ENV is pinned here rather than left to the build host.
-#
-# It was not pinned, and the build host's value is development, which caused two
-# shipped defects from one root cause:
-#
-#   - The entry bundle went out with React in development mode: 1619 KB against
-#     1242 KB for the same source built locally in production mode. That is
-#     ~377 KB of extra transfer plus a slower reconciler, landing on the low-end
-#     phone over congested data that the client named as the target. This is the
-#     real cause of the "1.6 MB entry bundle" flag, which was never a code-size
-#     problem.
-#   - The vite.config gate that decides whether to inject a 358 KB inline script
-#     read process.env.NODE_ENV. On the build host it was not "production", so
-#     the plugin was included and the runtime shipped to every resident.
-#
-# Deliberately scoped to the build phase only. Pinning it for the install phase
-# would make pnpm omit devDependencies, and vite lives there, so the build would
-# fail outright.
+# Scoped to the build phase only, deliberately. Pinning NODE_ENV for the install
+# phase would make pnpm omit devDependencies, and vite is a devDependency, so the
+# build would fail outright rather than merely produce a larger bundle.
 [phases.build]
 cmds = ["NODE_ENV=production pnpm build"]
