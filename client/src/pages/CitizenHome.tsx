@@ -52,6 +52,7 @@ import {
   parseOfflineReports,
   projectOfflineMapPoint,
   serializeOfflineReport,
+  sortCentersForCitizens,
   type CitizenEmergencyNotification,
   type CitizenLanguage,
   type RealtimeStreamPayload,
@@ -344,17 +345,15 @@ export default function CitizenHome() {
   const offlineSyncingRef = useRef(false);
   const displayCenters = useMemo(() => {
     const rows: CitizenCenterRow[] = centers?.length
-      ? centers
-          .slice(0, 3)
-          .map(center => ({
-            ...center,
-            nameFilipino: center.nameFilipino ?? null,
-            addressFilipino: center.addressFilipino ?? null,
-          }))
+      ? centers.map(center => ({
+          ...center,
+          nameFilipino: center.nameFilipino ?? null,
+          addressFilipino: center.addressFilipino ?? null,
+        }))
       : staticCenters.length
         ? staticCenters
         : cachedCenters.length
-        ? cachedCenters.slice(0, 3)
+        ? cachedCenters
         : fallbackCenters;
     const translated = rows.map(center => ({
       ...center,
@@ -365,16 +364,18 @@ export default function CitizenHome() {
           ? center.addressFilipino || center.address
           : center.address,
     }));
-    if (!userLocation) return translated;
-    return translated
-      .map(center => ({
-        ...center,
-        distance: distanceKm(userLocation, {
-          lat: Number(center.latitude),
-          lng: Number(center.longitude),
-        }),
-      }))
-      .sort((a, b) => a.distance - b.distance);
+    const withDistance = userLocation
+      ? translated.map(center => ({
+          ...center,
+          distance: distanceKm(userLocation, {
+            lat: Number(center.latitude),
+            lng: Number(center.longitude),
+          }),
+        }))
+      : translated;
+    // Open centers with free slots first, then nearest, then by name — the
+    // vacancy a citizen can actually use is what they should see first.
+    return sortCentersForCitizens(withDistance);
   }, [centers, staticCenters, cachedCenters, language, userLocation]);
   const visibleCenters = useMemo(() => {
     const query = centerSearch.trim().toLowerCase();
@@ -974,6 +975,11 @@ export default function CitizenHome() {
           </button>
         </section>
         <section className="citizen-centers">
+          {visibleCenters.length === 0 && (
+            <p className="citizen-centers-empty" role="status">
+              {t.noCentersFound}
+            </p>
+          )}
           {visibleCenters.map(center => {
             const available = Math.max(
               0,

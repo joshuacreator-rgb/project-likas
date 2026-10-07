@@ -1534,3 +1534,22 @@ Requested on 2026-10-06, relayed by the user on behalf of the client: safety adv
 **Verification.** `tsc --noEmit` clean; production build passed (bundle `index-DtXmgL__.js`). Manual check on staging: log in each role then refresh — the nav must stay the role's own; visiting `/admin` as a responder must redirect to `/responder`.
 
 **Runbook note.** Demo sessions should end with Logout (logout clears the preview keys). The preview role picker's key has no in-repo writer (it is external toolbar state) and would otherwise linger in the tab until a real login or logout clears it.
+## §15 — Citizen center-level vacancy: all centers, space-first, empty state (client questionnaire)
+
+**Context 2026-10-07.** The client questionnaire requested "add safety tips" (already live, §13) and described a vacancies feature: "helps user to navigate areas or rooms that are still not occupied." Validation found center-level vacancy was already implemented and live — the citizen card shows open/full status, free spaces (`maximumCapacity - currentOccupancy`), "X of Y people", a percentage bar, distance and directions, EN+FIL, offline-cached; and the number is accurate because `registerEvacuee` / `transferEvacuee` / `releaseEvacuee` update `currentOccupancy` transactionally. The genuinely missing part was the client's room/area-level ask, which is a new data model.
+
+**Decision (approved 2026-10-07): center-level improvements only; rooms deferred.** User chose the center-level polish scope. Room/area-level vacancy stays an open follow-up pending the client's answers to questionnaire parts that were left blank (what a room is, who updates occupancy, what the citizen should see).
+
+**Changes in this unit.**
+| Change | Effect |
+|---|---|
+| Removed the 3-center cap on live and cached center lists | Citizens can see every center, not just the first three |
+| Availability-first ordering via shared `sortCentersForCitizens` | Open centers with free slots sort first, then nearest, then by name (no GPS: by name) |
+| Empty state message `noCentersFound` (EN+FIL) with grid-span style | Clear feedback when no centers match, instead of a blank section |
+| Two new unit tests in `server/citizen.test.ts` | Sort correctness: space-first, distance tie-break, name fallback, input not mutated |
+
+**Files.** `shared/citizen.ts` (helper + copy key both languages), `client/src/pages/CitizenHome.tsx`, `client/src/index.css`, `server/citizen.test.ts`. Client + shared only: no database, no server router change, no migration.
+
+**Verification.** `tsc --noEmit` clean; `server/citizen.test.ts` 10/10; production build clean (bundle and css hashes changed). Live smoke gate pending at deploy time.
+
+**Residual.** Room/area-level vacancy (the client's "navigate areas or rooms that are still not occupied") is not built and needs a migration 0016 + room model + admin/staff room screens + citizen room view; it awaits the client's answers to the blank questionnaire parts.

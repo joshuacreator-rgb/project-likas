@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addOfflineReport, distanceKm, getDirectionsUrl, getSmsFallbackUrl, normalizeSmsConfiguration, parseOfflineReports, projectOfflineMapPoint, realtimeAudienceRoles, serializeOfflineReport } from "../shared/citizen";
+import { addOfflineReport, distanceKm, getDirectionsUrl, getSmsFallbackUrl, normalizeSmsConfiguration, parseOfflineReports, projectOfflineMapPoint, realtimeAudienceRoles, serializeOfflineReport, sortCentersForCitizens } from "../shared/citizen";
 
 describe("citizen mobility and offline utilities", () => {
   it("calculates a positive distance between two center coordinates", () => {
@@ -25,6 +25,26 @@ describe("citizen mobility and offline utilities", () => {
   it("preserves an English fallback when a live Filipino field is missing", () => {
     const liveAlert = { title: "Flood watch", titleFilipino: null };
     expect(liveAlert.titleFilipino || liveAlert.title).toBe("Flood watch");
+  });
+  it("sorts open centers with free space first, then nearest, then by name", () => {
+    const centers = [
+      { name: "Full Hall", currentOccupancy: 120, maximumCapacity: 120, status: "OPEN", distance: 0.5 },
+      { name: "Closed Hall", currentOccupancy: 0, maximumCapacity: 80, status: "CLOSED", distance: 0.1 },
+      { name: "Far Room", currentOccupancy: 10, maximumCapacity: 50, status: "OPEN", distance: 3 },
+      { name: "Near Room", currentOccupancy: 20, maximumCapacity: 60, status: "OPEN", distance: 1 },
+    ];
+    const ordered = sortCentersForCitizens(centers).map(center => center.name);
+    expect(ordered).toEqual(["Near Room", "Far Room", "Full Hall", "Closed Hall"]);
+  });
+  it("falls back to name order when no distance is known and keeps the input unchanged", () => {
+    const centers = [
+      { name: "Zulu Center", currentOccupancy: 5, maximumCapacity: 100, status: "OPEN" },
+      { name: "Alpha Center", currentOccupancy: 90, maximumCapacity: 100, status: "OPEN" },
+      { name: "Mid Center", currentOccupancy: 30, maximumCapacity: 100, status: "CLOSED" },
+    ];
+    const ordered = sortCentersForCitizens(centers);
+    expect(ordered.map(center => center.name)).toEqual(["Alpha Center", "Zulu Center", "Mid Center"]);
+    expect(centers.map(center => center.name)).toEqual(["Zulu Center", "Alpha Center", "Mid Center"]);
   });
   it("projects cached center coordinates into a bounded offline map point", () => {
     const point = projectOfflineMapPoint({ lat: 14.545, lng: 121.07 });
