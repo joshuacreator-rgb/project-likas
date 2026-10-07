@@ -1573,3 +1573,24 @@ Requested on 2026-10-06, relayed by the user on behalf of the client: safety adv
 **Verification.** `tsc --noEmit` clean; full suite 294/294 (the four hook-timeout files re-run solo: 52/52); production build clean (bundle `index-CZSzuQ8a.js`). Live smoke gate pending at deploy time.
 
 **Residual.** The runtime trigger for the unconfirmed session at the 5-8 minute refresh is not yet pinned (cookie presentation vs transient user-lookup failure vs an admin login in another tab sharing the `likas_session` cookie). On the next repro, capture the provenance **before clicking anything**: `JSON.parse(localStorage.getItem("manus-runtime-user-info"))` and `sessionStorage.getItem("likas-static-demo-role")` — `openId: "static-demo:admin"` confirms the stale-key path; a real `id` with a real `loginMethod` means the server issued an actual admin session. F1-F4 close the wrong-role outcome either way; this check only names which trigger fired.
+## §17 — Login pages: green side panel removed, single centered card (client request, UI only)
+
+**Context 2026-10-07.** The client asked to change the login pages: remove the green part, make the design more elegant, UI only. The login screens were a two-column slab — a dark-green marketing panel (`#123d39`, headline, feature list, tagline) beside the white form card — floating on a mint radial-gradient background, with green-tinted borders, labels, dividers, password toggles and modal overlays throughout the account family. All three screens (citizen, admin, staff/responder) share two markup templates in `Login.tsx`; register, accept-invitation, account-security and password-recovery sit on the same `.login-page`/`.login-card` classes.
+
+**Decision (approved 2026-10-07): remove the panel entirely; teal survives only as accent.** User chose the single-centered-card direction over recoloring the panel, and kept teal for the primary button, links and focus rings so sign-in still matches the app. Marketing copy was not deleted, only repositioned: each template keeps its existing tagline as a small line under the card.
+
+**Changes in this unit.**
+| Change | Effect |
+|---|---|
+| Green side panel and its `internalBrief` copy block removed from both login templates | Single centered login card on every login screen |
+| Existing taglines repositioned as `.login-undernote` under the card | No client-facing copy invented or lost |
+| Page background mint gradient → neutral porcelain; ink color neutral | Whole account family de-greens with it (shared `.login-page`) |
+| Card: symmetric hairline border, 24px radius, layered soft shadow | Removes the asymmetric `border-left:0` that assumed the panel; fixes the open left edge on standalone account cards |
+| Green-tinted inputs, labels, dividers, password toggle, modal backdrops → neutral grays | Teal remains only on the primary button, links and focus (brand accent) |
+| Dead `.login-brief*` CSS deleted, including both mobile media-query blocks | No orphan selectors, less CSS |
+
+**Files.** `client/src/pages/Login.tsx`, `client/src/index.css`. Client only: no database, no server router change, no migration. Logic, validation, ARIA, forms and flows untouched.
+
+**Verification.** `tsc --noEmit` clean; full suite 294/294 (the two hook-timeout files re-run solo: 35/35); production build clean (bundle `index-DILU_RIK.js`, css `index-BGJlPbjM.css`); grep confirms zero remaining references to any removed selector. Visual sign-off is the user's on the deployed page — live smoke gate pending at deploy time.
+
+**Residual.** The registration role picker (`.role-choice*`, teal hover tints) and the admin account-security page (`.security-card`/`.two-factor-setup`, mint tints) still carry the old palette; both sit on `.login-page` but were outside this request's scope. The panel's headline and feature list no longer display anywhere — if the client wants that content back it needs a new home.

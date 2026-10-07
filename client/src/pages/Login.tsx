@@ -25,45 +25,6 @@ const internalLoginLabels: Record<InternalLoginRole, string> = {
   responder: "Responder / Disaster Team",
 };
 
-const internalBrief: Record<
-  InternalLoginRole,
-  { topline: string; title: string; description: string; points: string[] }
-> = {
-  admin: {
-    topline: "Admin",
-    title: "Emergency Operations Command",
-    description:
-      "Configure the system, manage staff and responders, and keep operations running from one command center.",
-    points: [
-      "Manage users, roles, and access",
-      "Oversee emergency operations",
-      "Monitor system activity and reports",
-    ],
-  },
-  staff: {
-    topline: "Staff",
-    title: "Evacuation Center Operations",
-    description:
-      "Coordinate evacuation centers, track resources and capacity, and support families in your care.",
-    points: [
-      "Manage evacuation center operations",
-      "Track resources and capacity",
-      "Support displaced families",
-    ],
-  },
-  responder: {
-    topline: "Responder",
-    title: "Disaster Response Coordination",
-    description:
-      "Receive deployments, report field status, and coordinate with your response team in real time.",
-    points: [
-      "Receive and manage deployments",
-      "Report field status in real time",
-      "Coordinate your response team",
-    ],
-  },
-};
-
 function resolveInternalRole(): InternalLoginRole {
   if (typeof window === "undefined") return "admin";
   const path = window.location.pathname;
@@ -116,22 +77,6 @@ export function CitizenLogin() {
   return (
     <main className="login-page citizen-login-page">
       <div className="login-layout">
-        <aside className="login-brief">
-          <div className="login-brief-topline"><span className="login-live-dot" /> Community access</div>
-          <div className="login-brief-icon"><ShieldCheck size={28} /></div>
-          <div>
-            <span className="eyebrow">Project Likas</span>
-            <h2>Disaster Response &amp; Community Safety</h2>
-            <p>Stay informed, report emergencies, and find the safest path to support when time matters.</p>
-          </div>
-          <div className="login-brief-list">
-            <div><span className="list-pill">•</span> Locate safe evacuation centers</div>
-            <div><span className="list-pill">•</span> Report incidents and urgent hazards</div>
-            <div><span className="list-pill">•</span> Receive critical local updates</div>
-          </div>
-          <div className="login-brief-footer"><ShieldCheck size={16} /><span>Trusted community safety for every household.</span></div>
-        </aside>
-
         <section className="login-card citizen-login-card">
           <div className="login-brand">
             <div className="brand-mark"><ShieldCheck size={26} /></div>
@@ -231,6 +176,7 @@ export function CitizenLogin() {
             </>
           )}
         </section>
+        <p className="login-undernote">Trusted community safety for every household.</p>
       </div>
 
       {registrationOpen && <AccountRegister embedded initialRole="citizen" onClose={() => setRegistrationOpen(false)} />}
@@ -296,22 +242,6 @@ export function InternalLogin({
   return (
     <main className="login-page internal-login-page">
       <div className="login-layout">
-        <aside className="login-brief">
-          <div className="login-brief-topline"><span className="login-live-dot" /> {internalBrief[role].topline} access</div>
-          <div className="login-brief-icon"><ShieldCheck size={28} /></div>
-          <div>
-            <span className="eyebrow">Project Likas</span>
-            <h2>{internalBrief[role].title}</h2>
-            <p>{internalBrief[role].description}</p>
-          </div>
-          <div className="login-brief-list">
-            {internalBrief[role].points.map((point) => (
-              <div key={point}><span className="list-pill">•</span> {point}</div>
-            ))}
-          </div>
-          <div className="login-brief-footer"><ShieldCheck size={16} /><span>Secured access for authorized personnel only.</span></div>
-        </aside>
-
         <section className="login-card">
           <div className="login-brand">
             <div className="brand-mark"><ShieldCheck size={26} /></div>
@@ -470,6 +400,7 @@ export function InternalLogin({
             </button>
           )}
         </section>
+        <p className="login-undernote">Secured access for authorized personnel only.</p>
       </div>
 
       {recoveryOpen && <PasswordRecovery embedded onClose={() => setRecoveryOpen(false)} />}
