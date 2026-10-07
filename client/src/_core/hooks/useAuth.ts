@@ -76,16 +76,23 @@ export function useAuth(options?: UseAuthOptions) {
     }
   }, [logoutMutation, utils]);
 
-  // A confirmed backend session is authoritative. Drop any leftover preview or
-  // static role keys the moment auth.me resolves, so a refresh can never
-  // resurrect an old role from sessionStorage (which survives F5 in the tab).
+  // A confirmed backend session is authoritative — and so is its absence. The
+  // moment auth.me settles (a user, no session, or an error), any preview or
+  // static role keys are stale and must go, so a refresh can never resurrect
+  // an old role from sessionStorage (which survives F5 in the tab).
   useEffect(() => {
-    if (meQuery.data) clearStaticOverrides();
-  }, [meQuery.data]);
+    if (!meQuery.isLoading) clearStaticOverrides();
+  }, [meQuery.isLoading, meQuery.data, meQuery.error]);
 
   const state = useMemo(() => {
-    const staticDemoUser = getStaticDemoUser();
-    const staticUser = getStaticSession();
+    // Static/demo identities are a local-development fallback only; a deployed
+    // build (the Railway URL the client demos) treats auth.me as the single
+    // source of truth. Falling back to sessionStorage roles when the session
+    // is unconfirmed is what turned a citizen's idle refresh into an admin
+    // session on 2026-10-07: "no session confirmed" must read as logged out,
+    // never as a role left behind in this tab.
+    const staticDemoUser = import.meta.env.DEV ? getStaticDemoUser() : null;
+    const staticUser = import.meta.env.DEV ? getStaticSession() : null;
     // While the real session is still fetching, don't let a stale preview or
     // static role render in its place (the wrong-role flash on refresh). Only
     // fall back to static/demo once auth.me has settled with no session.

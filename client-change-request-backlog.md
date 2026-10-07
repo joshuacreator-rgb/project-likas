@@ -1553,3 +1553,23 @@ Requested on 2026-10-06, relayed by the user on behalf of the client: safety adv
 **Verification.** `tsc --noEmit` clean; `server/citizen.test.ts` 10/10; production build clean (bundle and css hashes changed). Live smoke gate pending at deploy time.
 
 **Residual.** Room/area-level vacancy (the client's "navigate areas or rooms that are still not occupied") is not built and needs a migration 0016 + room model + admin/staff room screens + citizen room view; it awaits the client's answers to the blank questionnaire parts.
+
+## §16 — Wrong-role after idle refresh: static/demo fallback removed from deployed builds (defect)
+
+**Context 2026-10-07.** Reported on staging: a citizen sat on the citizen home page for 5-8 minutes, refreshed, and landed in the admin home page "already logged in" as admin. Diagnosis (code-verified): `useAuth` fell back to `sessionStorage` identities (`likas-static-demo-role` — the external preview toolbar's role-picker key — and `likas-static-user`) whenever `auth.me` settled without a user, and a query **error** is settled with no user too, so a failed check was treated exactly like "no session". The route guards then correctly walked the adopted identity into the dashboard: at `/citizen` with role `admin`, `RouteGuard` redirects to `getHomePath("admin")` = `/admin`. The session itself should not have died (JWT and cookie are both 7 days, no idle timeout), so the session was unconfirmed at that refresh for a runtime reason — cookie not presented, or a failed user lookup. The root `/` path also rendered `Home` with no guard, so any adopted identity could open the internal shell by typing `/`. Decision input confirmed: the November defense demos on the Railway URL with real logins, so a deployed build must never invent a role from browser storage.
+
+**Decision (approved 2026-10-07): F1-F4 — static/demo fallback dead on deployed builds.** Local development keeps the static/demo fallback (`import.meta.env.DEV`); deployed builds treat `auth.me` as the single source of truth.
+
+**Changes in this unit.**
+| Change | Effect |
+|---|---|
+| F1: static/demo identity fallback in `useAuth` gated to DEV builds | No confirmed session reads as logged out, never as a role left in `sessionStorage` |
+| F2: clear static overrides whenever `auth.me` settles — user, no session, or error | Stale role keys cannot linger for the next load (extends the earlier "only when a user came back" rule) |
+| F3: `RouteGuard` renders a retry screen when the session check fails, instead of redirecting | A network blip is not a logout; no dashboard renders on an unconfirmed session |
+| F4: `/` now runs `RootRedirect` — authenticated users go to their own home path, anonymous keeps the existing sign-in landing | A citizen typing `/` no longer gets the internal dashboard shell |
+
+**Files.** `client/src/_core/hooks/useAuth.ts`, `client/src/App.tsx`. Client only: no database, no server router change, no migration.
+
+**Verification.** `tsc --noEmit` clean; full suite 294/294 (the four hook-timeout files re-run solo: 52/52); production build clean (bundle `index-CZSzuQ8a.js`). Live smoke gate pending at deploy time.
+
+**Residual.** The runtime trigger for the unconfirmed session at the 5-8 minute refresh is not yet pinned (cookie presentation vs transient user-lookup failure vs an admin login in another tab sharing the `likas_session` cookie). On the next repro, capture the provenance **before clicking anything**: `JSON.parse(localStorage.getItem("manus-runtime-user-info"))` and `sessionStorage.getItem("likas-static-demo-role")` — `openId: "static-demo:admin"` confirms the stale-key path; a real `id` with a real `loginMethod` means the server issued an actual admin session. F1-F4 close the wrong-role outcome either way; this check only names which trigger fired.

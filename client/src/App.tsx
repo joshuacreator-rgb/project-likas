@@ -30,6 +30,47 @@ function RouteSplash() {
 }
 
 /**
+ * Shown when the session check itself fails (network/server error, as opposed
+ * to "no session"). A failed check is not a logout — never redirect on it, and
+ * never render a dashboard we could not confirm; offer a retry instead.
+ */
+function AuthErrorRetry({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div
+      className="route-splash"
+      style={{
+        display: "grid",
+        placeItems: "center",
+        minHeight: "100vh",
+        gap: 14,
+        textAlign: "center",
+        padding: 24,
+      }}
+    >
+      <p style={{ margin: 0, maxWidth: 420 }}>
+        Could not confirm your session. Check your connection and try again.
+      </p>
+      <button
+        onClick={onRetry}
+        style={{
+          minHeight: 46,
+          padding: "0 22px",
+          border: 0,
+          borderRadius: 10,
+          background: "#176f67",
+          color: "#fff",
+          font: "inherit",
+          fontWeight: 700,
+          cursor: "pointer",
+        }}
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+
+/**
  * Route-level role guard. The dashboard path a user lands on must match their
  * actual role; anything else redirects to their own home path. This is a
  * client-side visibility guard — the backend still enforces authorization on
@@ -42,14 +83,33 @@ function RouteGuard({
   role: GuardedRole;
   children: ReactNode;
 }) {
-  const { user, loading } = useAuth();
+  const { user, loading, error, refresh } = useAuth();
   if (loading) return <RouteSplash />;
+  // An unconfirmed session on a failed check is not a logout: offer a retry
+  // instead of redirecting (and never fall through to a static role).
+  if (!user && error) return <AuthErrorRetry onRetry={refresh} />;
   const allowed =
     role === "citizen"
       ? user?.role === "citizen" || user?.role === "user"
       : user?.role === role;
   if (!allowed) return <Redirect to={getHomePath(user?.role)} />;
   return <>{children}</>;
+}
+
+/**
+ * The root path renders no dashboard of its own. Authenticated users go
+ * straight to their own role's home — a citizen must not be able to open the
+ * internal staff dashboard by typing `/`. Anonymous visitors keep the existing
+ * sign-in landing (Home renders the DashboardLayout sign-in prompt).
+ */
+function RootRedirect() {
+  const { user, loading, error, refresh } = useAuth();
+  if (loading) return <RouteSplash />;
+  if (!user) {
+    if (error) return <AuthErrorRetry onRetry={refresh} />;
+    return <Home />;
+  }
+  return <Redirect to={getHomePath(user.role)} />;
 }
 
 function Router() {
@@ -76,7 +136,7 @@ function Router() {
       <Route path={"/citizen"}>{() => (
         <RouteGuard role="citizen"><CitizenHome /></RouteGuard>
       )}</Route>
-      <Route path={"/"} component={Home} />
+      <Route path={"/"} component={RootRedirect} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>
