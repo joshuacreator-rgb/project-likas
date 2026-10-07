@@ -1514,4 +1514,23 @@ Requested on 2026-10-06, relayed by the user on behalf of the client: safety adv
 
 **Estimate.** Scoped at 3-5 hours; implemented 2026-10-06. No database, no video, no admin-UI changes.
 
-**Residual (OQ 6 stands).** Built-in tips are safe, general guidance written from official sources; they are not LGU-endorsed hazard-specific instructions. The client office should still name a content owner who reviews and owns the wording before the defence.
+**Residual (OQ 6 stands).** Built-in tips are safe, general guidance written from official sources; they are not LGU-endorsed hazard-specific instructions. The client office should still name a content owner who reviews and owns the wording before the defence.## §14 — Wrong-role pages after refresh (a responder's refresh shows the admin/staff "ID verification" tab)
+
+**Reported 2026-10-07.** Refreshing the browser on the internal pages changed which role pages/tabs were visible. A responder refreshed and the "ID verification" tab (admin/staff-only) appeared. Reference: this session's investigation.
+
+**Root cause (verified in code, 2026-10-07).** The UI derives the active role from `user = auth.me ?? staticDemoUser ?? staticUser` (`client/src/_core/hooks/useAuth.ts`). The sessionStorage keys `likas-static-demo-role` and `likas-static-user` survive F5 in the same tab, were only cleared on explicit logout, and while `auth.me` was still loading the presence of any stale key skipped the loading state entirely (rendering the stale role instantly). A leftover admin/staff preview role therefore shadowed the real responder session after refresh. The routes never checked the path against the role (`/admin`, `/staff`, `/responder` and `/` all rendered the same `Home`); the nav is built purely from `user?.role`, and the ID verification tab exists only in the admin and staff nav.
+
+**Severity.** Client-side role-visibility bug, not a data leak: the backend still enforces roles on every procedure (`idVerification.queue` is `roleProcedure(["admin","staff"])`, evidence is gated by `canAccessReport`, privileged calls are `adminProcedure`/`protectedProcedure`). A responder could see the tab but could not load its data. Confusing in demos and likely to be caught by the client at the defence.
+
+**Decision (approved 2026-10-07): implement R1 + R2 + R3 as one unit.**
+| # | Change | Effect |
+|---|---|---|
+| R1 | Clear stale static/demo keys the moment `auth.me` confirms a real session (`useAuth` effect) and on every successful real login (`Login.tsx`); the citizen offline-login fallback also clears a stale demo role | A refresh can never resurrect an old role |
+| R2 | Route guards in `App.tsx` — `/admin`, `/staff`, `/responder`, `/citizen` require their matching role; mismatch redirects to `getHomePath(user?.role)` | No path renders another role's UI |
+| R3 | Don't fall back to static/demo keys while `auth.me` is still loading (`useAuth` loading rule) | Kills the wrong-role flash during refresh |
+
+**Files.** `client/src/lib/staticAuth.ts` (adds `clearStaticDemoRole` + `clearStaticOverrides`), `client/src/_core/hooks/useAuth.ts`, `client/src/App.tsx`, `client/src/pages/Login.tsx`. Client-only: no database, no server change, no migration.
+
+**Verification.** `tsc --noEmit` clean; production build passed (bundle `index-DtXmgL__.js`). Manual check on staging: log in each role then refresh — the nav must stay the role's own; visiting `/admin` as a responder must redirect to `/responder`.
+
+**Runbook note.** Demo sessions should end with Logout (logout clears the preview keys). The preview role picker's key has no in-repo writer (it is external toolbar state) and would otherwise linger in the tab until a real login or logout clears it.

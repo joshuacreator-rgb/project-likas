@@ -7,7 +7,11 @@ import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
 import { getHomePath } from "../../../shared/roles";
 import { getAuthErrorMessage } from "../../../shared/auth-feedback";
-import { authenticateStaticAccount } from "@/lib/staticAuth";
+import {
+  authenticateStaticAccount,
+  clearStaticDemoRole,
+  clearStaticOverrides,
+} from "@/lib/staticAuth";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import AccountRegister from "./AccountRegister";
 import PasswordRecovery from "./PasswordRecovery";
@@ -82,12 +86,14 @@ export function CitizenLogin() {
 
   const login = trpc.localAuth.login.useMutation({
     onSuccess: () => {
+      clearStaticOverrides();
       navigate("/citizen");
     },
     onError: (error) => {
       if (!import.meta.env.DEV) return;
       const user = authenticateStaticAccount(email, password);
       if (!user || user.role !== "citizen") return;
+      clearStaticDemoRole();
       navigate(getHomePath(user.role));
     },
   });
@@ -260,12 +266,14 @@ export function InternalLogin({
         setChallengeToken(result.challengeToken);
         return;
       }
+      clearStaticOverrides();
       navigate(getHomePath(role));
     },
   });
 
   const verifyTwoFactor = trpc.localAuth.verifyTwoFactor.useMutation({
     onSuccess: () => {
+      clearStaticOverrides();
       navigate(getHomePath(role));
     },
   });

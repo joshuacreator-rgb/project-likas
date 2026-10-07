@@ -1,7 +1,7 @@
 import { startLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { TRPCClientError } from "@trpc/client";
-import { clearStaticSession, getStaticSession } from "@/lib/staticAuth";
+import { clearStaticOverrides, getStaticSession } from "@/lib/staticAuth";
 import { useCallback, useEffect, useMemo } from "react";
 
 const staticDemoRoles = ["admin", "staff", "responder", "citizen"] as const;
@@ -69,26 +69,36 @@ export function useAuth(options?: UseAuthOptions) {
       // backend cookie is cleared by the logout mutation.
       try {
         sessionStorage.removeItem("manus-cookie");
-        sessionStorage.removeItem("likas-static-demo-role");
-        clearStaticSession();
+        clearStaticOverrides();
       } catch {}
       utils.auth.me.setData(undefined, null);
       await utils.auth.me.invalidate();
     }
   }, [logoutMutation, utils]);
 
+  // A confirmed backend session is authoritative. Drop any leftover preview or
+  // static role keys the moment auth.me resolves, so a refresh can never
+  // resurrect an old role from sessionStorage (which survives F5 in the tab).
+  useEffect(() => {
+    if (meQuery.data) clearStaticOverrides();
+  }, [meQuery.data]);
+
   const state = useMemo(() => {
     const staticDemoUser = getStaticDemoUser();
     const staticUser = getStaticSession();
+    // While the real session is still fetching, don't let a stale preview or
+    // static role render in its place (the wrong-role flash on refresh). Only
+    // fall back to static/demo once auth.me has settled with no session.
+    const meQuerySettled = !meQuery.isLoading;
+    const effectiveUser =
+      meQuery.data ?? (meQuerySettled ? staticDemoUser ?? staticUser : null);
     localStorage.setItem(
       "manus-runtime-user-info",
-      JSON.stringify(meQuery.data ?? staticDemoUser ?? staticUser)
+      JSON.stringify(effectiveUser)
     );
     return {
-      user: meQuery.data ?? staticDemoUser ?? staticUser,
-      loading: staticDemoUser || staticUser
-        ? logoutMutation.isPending
-        : meQuery.isLoading || logoutMutation.isPending,
+      user: effectiveUser,
+      loading: meQuery.isLoading || logoutMutation.isPending,
       error: meQuery.error ?? logoutMutation.error ?? null,
       isAuthenticated: Boolean(meQuery.data ?? staticDemoUser),
     };

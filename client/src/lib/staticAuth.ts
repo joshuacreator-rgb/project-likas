@@ -84,6 +84,19 @@ export function clearStaticSession() {
   sessionStorage.removeItem(sessionStorageKey);
 }
 
+export function clearStaticDemoRole() {
+  sessionStorage.removeItem("likas-static-demo-role");
+}
+
+/**
+ * Drop every locally-stored preview/static role so a stale key can never
+ * shadow a real backend session on the next refresh. A real login must win.
+ */
+export function clearStaticOverrides() {
+  clearStaticDemoRole();
+  clearStaticSession();
+}
+
 function readStaticAccount() {
   try {
     const raw = localStorage.getItem(accountStorageKey);
