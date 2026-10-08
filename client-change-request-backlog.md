@@ -1679,3 +1679,15 @@ Requested on 2026-10-06, relayed by the user on behalf of the client: safety adv
 **Result (measured).** `ADMIN_CREATED` uid=40 `demo.admin@likas.training`, credential present. Live API verification: `localAuth.login` with the account row returned 200 with a session cookie and a payload carrying `role: admin`, `isDemo: false` — `LOGIN_VERIFY_OK`. (The first node-based run printed the check outcome before a known Windows libuv teardown assertion altered its exit code; the PowerShell rerun of the identical request exited 0 cleanly.)
 
 **Residual.** Staging now has two admins: `#1` (owner login) and `#40` (demo). Handing the demo credentials to anyone after the demonstration should be followed by a password change at `/account/security`. `PUBLIC_URL` and the Source branch switch remain pending exactly as recorded in §21.
+## §23 — Invitation and password-reset flows verified working; PUBLIC_URL now set (corrects §21/§22 residual)
+
+**State change 2026-10-09.** `PUBLIC_URL` is now set in the live container to `https://comfortable-youth-staging.up.railway.app` (read via `printenv` over SSH; the dashboard table truncates the value). This supersedes the §21 and §22 residual notes that it was unset — invitation and reset links no longer fall back to `http://localhost:5173`. Note it is the Railway URL, not the `likas.fyi` value previously approved in principle; both serve the app, so this is functional as-is, and switching remains the user's call.
+
+**Live verification 2026-10-09 (as the §22 demo admin).** `FLOW_TEST_OK` for both flows against the live origin:
+
+- Invitation: `admin.createInvitation` (responder) returned `emailSent: true`, `emailError: null`, and `inviteUrl` — the URL handed to both the UI copy-box and the email — was `https://comfortable-youth-staging.up.railway.app/accept-invitation?token=...`.
+- Reset: `localAuth.forgotPassword` returned `accepted: true` and, correctly for production, `devToken`/`resetUrl` null (the link is email-only by design). No `[PasswordReset] Recovery email failed` warning in `railway logs`; the same SMTP path reported `emailSent: true` on the invite.
+
+**Cleanup after the test.** The throwaway invitation row (`invite.test.8a0d1cc5@likas.training`) was deleted and the reset token the test request created on the demo admin credential was cleared; staging data remains exactly as §21/§22 left it (admins `#1` and `#40` only, all data tables empty except weather self-refill).
+
+**Remaining caveat.** SMTP acceptance and token issuance are proven, but neither email can be opened: `likas.training` has no real mailbox. A click-through to a real inbox (e.g. the user's own Gmail) is the last step before the demo — same for reset (request, open link, set a new password) and invite (admin creates the invite, the invitee opens the link).
