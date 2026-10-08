@@ -1594,3 +1594,26 @@ Requested on 2026-10-06, relayed by the user on behalf of the client: safety adv
 **Verification.** `tsc --noEmit` clean; full suite 294/294 (the two hook-timeout files re-run solo: 35/35); production build clean (bundle `index-DILU_RIK.js`, css `index-BGJlPbjM.css`); grep confirms zero remaining references to any removed selector. Visual sign-off is the user's on the deployed page — live smoke gate pending at deploy time.
 
 **Residual.** The registration role picker (`.role-choice*`, teal hover tints) and the admin account-security page (`.security-card`/`.two-factor-setup`, mint tints) still carry the old palette; both sit on `.login-page` but were outside this request's scope. The panel's headline and feature list no longer display anywhere — if the client wants that content back it needs a new home.
+
+## §18 — Safety advice: click-to-play YouTube video per topic (client request, UI only)
+
+**Request (via user, 2026-10-08):** the client wants the built-in safety advice improved with a video embedded from YouTube, related to each topic, and asked what approach is better.
+
+**Recommendation (approved 2026-10-08): click-to-play facade, not always-on iframes.** An always-embedded player would put five live iframes on the citizen home page, contact YouTube on load, and fail visibly if the venue network blocks YouTube. The facade keeps one lazy thumbnail per expanded card and requests the `youtube-nocookie.com` player only on tap; if the thumbnail host is unreachable it degrades to a plain tile with the play control, and the advice text (the load-bearing content) never depends on YouTube. Self-hosting the videos was rejected (public repo, re-upload copyright, storage/bandwidth); link-outs were rejected because the client asked for embedded playback.
+
+**Video sources (all verified embeddable via YouTube oEmbed on 2026-10-08; shortlist approved by the user, being sent to the client for final say):** earthquake = DOST-PHIVOLCS "Paghahanda sa Lindol (Earthquake Drill)"; storm = GMA "Tropical Cyclone Wind Signal, explained"; flood = Philippine Red Cross Official "Flood Preparedness: Improvised Floatation Device"; fire = BFP Region 7 "Fire Safety at Home"; general = Philippine Red Cross Official "Disaster Wais Series Ep. 1 - Go Bag". Caveat sent with the list: PAGASA's own channel has no short evergreen typhoon piece, so the storm pick is a news explainer unless the client supplies a PAGASA URL. Swapping any id is a one-line change in `shared/adviceContent.ts`.
+
+**Changes in this unit.**
+| Change | Effect |
+|---|---|
+| `youtubeId` field added to `BuiltinAdviceItem` + all five items | One official-source video per topic, hard-coded, typed |
+| New `client/src/components/VideoFacade.tsx` | Thumbnail + play button; `youtube-nocookie` iframe only on click; id format validated at render; thumbnail `onError` → styled tile |
+| Facade rendered in the expanded advice detail (`CitizenHome.tsx`) | Collapsed cards cost nothing; DB-published rows have no id, so nothing changes for them |
+| `.citizen-advice-video*` CSS (16:9 box, teal-on-white play control) | Matches the advice card palette |
+| Content test: valid, unique 11-char id per item | Future edits can't ship a broken or duplicate video id |
+
+**Files.** `shared/adviceContent.ts`, `shared/adviceContent.test.ts`, `client/src/components/VideoFacade.tsx` (new), `client/src/pages/CitizenHome.tsx`, `client/src/index.css`. No server, router, schema or migration change; no new visible copy (the play control's accessible name reuses the advice headline in the active language).
+
+**Verification.** `tsc --noEmit` clean; production build clean (bundle `index-C5xcDoQt.js`, css `index-CYL_uw0C.css`); suite 295/295 (four hook-timeout files re-run solo: 52/52); all five video ids confirmed embeddable (oEmbed 200 with channel names above); secret scan of the diff clean. Live render check on staging at deploy time (thumbnail loads, fallback tile, player starts on tap).
+
+**Residual.** The facade still depends on YouTube at play time; if the defense venue blocks it, the advice text stands alone and the tile shows YouTube's own error only after a tap. Admin-published advice rows carry no video field — if the office starts publishing their own advice (the `advice.list` feed currently returns `[]` on staging), videos on those rows are a separate phase (schema + admin UI).

@@ -33,6 +33,7 @@ import {
   type EvidenceSend,
 } from "@/lib/reportEvidence";
 import RoleOnboarding from "@/components/RoleOnboarding";
+import { VideoFacade } from "@/components/VideoFacade";
 import { getStaticSession } from "@/lib/staticAuth";
 import "leaflet/dist/leaflet.css";
 import {
@@ -73,7 +74,7 @@ import {
 import { builtinAdvice } from "../../../shared/adviceContent";
 
 /** Published guidance plus its steps, as cached and as returned by the API. */
-type CitizenAdviceRow = AdviceRecord & { steps: AdviceStepRecord[] };
+type CitizenAdviceRow = AdviceRecord & { steps: AdviceStepRecord[]; youtubeId?: string | null };
 
 type CitizenCenterRow = {
   name: string;
@@ -1278,6 +1279,9 @@ export default function CitizenHome() {
                             );
                           })}
                         </ol>
+                      )}
+                      {row.youtubeId && (
+                        <VideoFacade videoId={row.youtubeId} label={adviceHeadline(row, language)} />
                       )}
                     </div>
                   )}

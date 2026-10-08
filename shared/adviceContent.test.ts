@@ -58,4 +58,12 @@ describe("builtin safety advice content", () => {
       expect(isAdviceDraftPublishable(item)).toBe(true);
     }
   });
+
+  it("has one valid, unique YouTube video id per item for the click-to-play facade", () => {
+    const ids = builtinAdvice.map(item => item.youtubeId);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) {
+      expect(id).toMatch(/^[\w-]{11}$/);
+    }
+  });
 });

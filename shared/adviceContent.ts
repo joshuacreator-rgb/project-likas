@@ -11,6 +11,12 @@
  *
  * Wording was drafted from official PAGASA / NDRRMC / OCD guidance and
  * reviewed and approved by the user on 2026-10-06 before shipping.
+ *
+ * Backlog §18: every item also carries one official-source YouTube video,
+ * rendered on the citizen home page through a click-to-play facade that
+ * never contacts YouTube until the resident taps play. Video ids were
+ * verified embeddable and approved by the user on 2026-10-08; swapping one
+ * is a single-line change here.
  */
 
 import type { AdviceCategory, AdviceRecord, AdviceStepRecord } from "./advice";
@@ -22,6 +28,7 @@ export type BuiltinAdviceItem = AdviceRecord & {
   bodyFilipino: string;
   isEmergency: boolean;
   sortOrder: number;
+  youtubeId: string;
   status: "PUBLISHED";
   steps: AdviceStepRecord[];
 };
@@ -47,6 +54,7 @@ export const builtinAdvice: BuiltinAdviceItem[] = [
       "Habang lumilindol: dumapa at takpan ang ulo at leeg sa ilalim ng matibay na mesa, at kumapit hanggang huminto ang pagyanig. Kung nasa labas, lumipat sa bukas na lugar, malayo sa mga gusali, puno, at poste. Huwag lumabas habang nanginginig ang lupa. Pagkatapos: tingnan kung may nasugatan, maghanda para sa aftershock, lumayo sa mga sirang gusali, at huwag gumamit ng elevator.",
     isEmergency: true,
     sortOrder: 1,
+    youtubeId: "EKAhY84FPbs",
     status: "PUBLISHED",
     steps: [
       { instruction: "Drop, cover, and hold on.", instructionFilipino: "Dapa, takpan, at kumapit." },
@@ -71,6 +79,7 @@ export const builtinAdvice: BuiltinAdviceItem[] = [
       "Bago ang bagyo: subaybayan ang mga babala ng PAGASA, ayusin ang mga bagay na maaaring tangayin, at mag-imbak ng inuming tubig, pagkain, flashlight, radyo, at power bank. Alamin ang pinakamalapit na evacuation center. Habang may bagyo: manatili sa loob at lumayo sa mga bintana, at huwag maglakad o magmaneho sa baha. Pagkatapos: tingnan ang mga pinsala, mag-ingat sa mga natumbang kawad ng kuryente, at maghanda sa power interruption.",
     isEmergency: true,
     sortOrder: 2,
+    youtubeId: "KyOnxOhnMaM",
     status: "PUBLISHED",
     steps: [
       { instruction: "Monitor official warnings (PAGASA).", instructionFilipino: "Subaybayan ang opisyal na babala (PAGASA)." },
@@ -95,6 +104,7 @@ export const builtinAdvice: BuiltinAdviceItem[] = [
       "Huwag tumawid o magmaneho sa baha, kahit mababaw ito - kayang tangayin ng agos ang tao at sasakyan. Patayin ang kuryente at gas kung papasok ang tubig sa bahay. Ilipat sa mataas na bahagi ang mahahalagang gamit at dokumento. Kung naipit sa gusali, pumunta sa pinakamataas na palapag at tumawag ng tulong (911). Pagkatapos: maghintay ng opisyal na pahintulot bago bumalik at mag-ingat sa mga sakit na dulot ng maruming tubig.",
     isEmergency: true,
     sortOrder: 3,
+    youtubeId: "4a_ZmVz2C4c",
     status: "PUBLISHED",
     steps: [
       { instruction: "Go to higher ground.", instructionFilipino: "Pumunta sa mataas na lugar." },
@@ -119,6 +129,7 @@ export const builtinAdvice: BuiltinAdviceItem[] = [
       "Kung maliit pa ang apoy at ligtas lapitan, patayin ito kung kaya (Pull, Aim, Squeeze, Sweep). Kung lumalaki ang apoy, lumabas agad, isara ang mga pinto sa likod mo, at manatili sa mababang bahagi para iwasan ang usok. Damhin ang pinto bago buksan - kung mainit, gumamit ng ibang labasan. Huwag gumamit ng elevator. Tumawag sa 911 o sa fire station. Kapag nakalabas na, huwag nang bumalik sa loob.",
     isEmergency: true,
     sortOrder: 4,
+    youtubeId: "KDeegIXoxFA",
     status: "PUBLISHED",
     steps: [
       { instruction: "Get out and stay out.", instructionFilipino: "Lumabas at manatili sa labas." },
@@ -143,6 +154,7 @@ export const builtinAdvice: BuiltinAdviceItem[] = [
       "Alamin ang mga panganib sa inyong barangay at ang pinakamalapit na evacuation center. Maghanda ng emergency kit: tubig, pagkain, flashlight, radyo, power bank, mga gamot, at kopya ng mga dokumento. Gumawa ng plano ng pamilya: meeting place at mga contact number. Itago ang mga emergency number (911, barangay). Sundin ang mga tagubilin ng barangay at DRRM. Tulungan ang mga kapitbahay na matatanda o may kapansanan.",
     isEmergency: false,
     sortOrder: 5,
+    youtubeId: "oTyYzHntBxQ",
     status: "PUBLISHED",
     steps: [
       { instruction: "Know your hazards and evacuation center.", instructionFilipino: "Alamin ang mga panganib at evacuation center." },
