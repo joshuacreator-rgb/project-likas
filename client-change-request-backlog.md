@@ -1617,3 +1617,20 @@ Requested on 2026-10-06, relayed by the user on behalf of the client: safety adv
 **Verification.** `tsc --noEmit` clean; production build clean (bundle `index-C5xcDoQt.js`, css `index-CYL_uw0C.css`); suite 295/295 (four hook-timeout files re-run solo: 52/52); all five video ids confirmed embeddable (oEmbed 200 with channel names above); secret scan of the diff clean. Live render check on staging at deploy time (thumbnail loads, fallback tile, player starts on tap).
 
 **Residual.** The facade still depends on YouTube at play time; if the defense venue blocks it, the advice text stands alone and the tile shows YouTube's own error only after a tap. Admin-published advice rows carry no video field — if the office starts publishing their own advice (the `advice.list` feed currently returns `[]` on staging), videos on those rows are a separate phase (schema + admin UI).
+## §19 — Mobile side panel painted over by the map (defect, UI only)
+
+**Context 2026-10-08.** Reported from a phone: on the dashboard, activating the side panel (hamburger menu at <=800px) leaves the map overlapping it. Diagnosis (code-verified): the mobile panel is `position:fixed` at `z-index:50`, while Leaflet paints its own layers with internal z-indexes — tile pane 200, overlay pane 400, marker pane 600, popup pane 700, controls 800, control wrappers 1000 — plus the app's `.map-overlay` chip at z 500. `.map-frame` was `position:relative` but carried no `z-index`, so it never formed a stacking context and every one of those layers escaped into the root stacking context, above the panel. The citizen map was already contained (`.citizen-map-wrap { z-index:0 }`); the three dashboard-side maps (`.map-frame`, `.responder-map-frame`, `.pateros-picker-map`) were not. The same escape also let map layers paint through modal backdrops (registration modal z 200, citizen report modal z 50) wherever the boxes overlapped.
+
+**Decision (approved 2026-10-08): contain the maps, do not raise the panel.** One appended rule gives each map frame `z-index:0` — the pattern the citizen map already uses — instead of pushing the side panel above Leaflet's z-1000 internals. Containment fixes every map on every screen, leaves the panel's z-index and every other overlay relationship untouched, and keeps the map's internal order (popups above markers above tiles) exactly as it was.
+
+**Changes in this unit.**
+| Change | Effect |
+|---|---|
+| `.map-frame, .responder-map-frame, .pateros-picker-map { position: relative; z-index: 0 }` appended to `client/src/index.css` with an explanatory comment | Leaflet's internal z-indexes and `.map-overlay` stay inside each map; the open side panel always paints above tiles, markers and controls |
+| No component, markup, logic or copy change | Pure stacking fix; desktop layout, map interaction and in-map layer order unchanged |
+
+**Files.** `client/src/index.css`. Client only: no database, no server router change, no migration.
+
+**Verification.** `tsc --noEmit` clean; production build clean (css `index-0aeiXd55.css`, bundle `index-Cu1gaS9D.js`); full suite 295/295 (no re-runs needed); built CSS confirmed to contain `.map-frame,.responder-map-frame,.pateros-picker-map{z-index:0;position:relative}`; secret scan of the diff clean. Live smoke gate runs at deploy time; visual confirmation of the repro (phone, <=800px, panel open over the incident map) is the reporter's on the deployed build.
+
+**Residual.** The panel still opens without a dimmed backdrop or scroll lock behind it — untouched here, since this unit changed stacking only. Any map surface added later needs the same containment (a `z-index` on its frame); the citizen map already had it, the three dashboard maps now do.
