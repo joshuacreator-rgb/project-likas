@@ -706,8 +706,8 @@ export default function CitizenHome() {
 
   function submitReport() {
     if (
-      !reportText.trim() ||
-      !location.trim() ||
+      reportText.trim().length < 5 ||
+      location.trim().length < 2 ||
       createReportMutation.isPending
     )
       return;
@@ -795,10 +795,21 @@ export default function CitizenHome() {
             setQueuedWithPhotos(hasOutstanding(attachmentsRef.current));
             speakText(t.queued, speechLanguage);
           } else {
-            // Server error — show the real error message
-            const msg = error.message || (language === "fil"
-              ? "Hindi maipadala ang ulat. Subukan muli o gamitin ang SMS."
-              : "Report could not be sent. Please try again or use SMS.");
+            /**
+             * A Zod rejection arrives as a JSON-serialised issues array in
+             * `error.message`. That payload is for developers, not for a
+             * resident in an emergency — fall back to the friendly message
+             * whenever the server did not send a human sentence.
+             */
+            const raw = (error.message || "").trim();
+            const looksLikePayload =
+              raw.startsWith("[") || raw.startsWith("{");
+            const msg =
+              !raw || looksLikePayload
+                ? language === "fil"
+                  ? "Hindi maipadala ang ulat. Subukan muli o gamitin ang SMS."
+                  : "Report could not be sent. Please try again or use SMS."
+                : raw;
             setSubmitError(msg);
           }
         },
@@ -1417,6 +1428,7 @@ export default function CitizenHome() {
                     onChange={event => setReportText(event.target.value)}
                     placeholder={t.example}
                   />
+                  <small className="citizen-field-hint">{t.describeMin}</small>
                 </label>
                 <label className="citizen-input-label">
                   {t.location}
@@ -1430,6 +1442,7 @@ export default function CitizenHome() {
                         : "Barangay, street, or landmark"
                     }
                   />
+                  <small className="citizen-field-hint">{t.locationMin}</small>
                 </label>
                 {locationPickerOpen && <CitizenLocationPicker latitude={reportLatitude} longitude={reportLongitude} onPick={(latitude, longitude) => { setReportLatitude(latitude); setReportLongitude(longitude); setLocation(`Pinned location: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`); }} />}
                 <div className="citizen-attachments">
@@ -1537,8 +1550,8 @@ export default function CitizenHome() {
                   )}
                   <Button
                     disabled={
-                      !reportText.trim() ||
-                      !location.trim() ||
+                      reportText.trim().length < 5 ||
+                      location.trim().length < 2 ||
                       createReportMutation.isPending
                     }
                     onClick={() => { setSubmitError(""); submitReport(); }}

@@ -1634,3 +1634,24 @@ Requested on 2026-10-06, relayed by the user on behalf of the client: safety adv
 **Verification.** `tsc --noEmit` clean; production build clean (css `index-0aeiXd55.css`, bundle `index-Cu1gaS9D.js`); full suite 295/295 (no re-runs needed); built CSS confirmed to contain `.map-frame,.responder-map-frame,.pateros-picker-map{z-index:0;position:relative}`; secret scan of the diff clean. Live smoke gate runs at deploy time; visual confirmation of the repro (phone, <=800px, panel open over the incident map) is the reporter's on the deployed build.
 
 **Residual.** The panel still opens without a dimmed backdrop or scroll lock behind it — untouched here, since this unit changed stacking only. Any map surface added later needs the same containment (a `z-index` on its frame); the citizen map already had it, the three dashboard maps now do.
+## §20 — Incident report: description on the responder alert; proper minimum-character validation (client request + defect)
+
+**Context 2026-10-09.** Two asks on the emergency report flow. (1) Enhancement: the resident's description should appear on the alert responders receive. Diagnosis: the responder alert auto-created for a citizen emergency (`operations.createRiskReport`) carried only `` `${reportType} reported at ${location}` `` plus the map-pin link — the description field never entered the message, so responders saw where and what type, never what was happening. (2) Defect: a too-short description surfaced a raw Zod payload on screen: `` [ { "origin": "string", "code": "too_small", "minimum": 5, "inclusive": true, "path": [ "description" ], "message": "Too small: expected string to have >=5 characters" } ] ``. Diagnosis: the form guarded only against empty text while the server enforces `description min 5` and `location min 2`; tRPC serialises Zod's issues into `error.message` and `onError` displayed it verbatim — which also armed the Send-SMS fallback, since that keys off the same state. A 1-character location had the same exposure (`path: ["location"]`).
+
+**Decision (approved 2026-10-09): description into the alert; validate client-side; never surface payloads.** Recommended scope chosen — alert + validation only; the citizen realtime incident feed was deliberately left as is.
+
+**Changes in this unit.**
+
+| Change | Effect |
+|---|---|
+| Responder alert message: `` `${reportType} reported at ${location}: ${description}.` `` + pin link | Responders read the resident's own words, not just type and location |
+| Send disabled until description >=5 and location >=2 trimmed characters, with an always-visible hint under both fields (new `describeMin` / `locationMin` copy, EN + FIL) | The rejection path becomes unreachable from the UI and the rule is stated up front |
+| `submitReport` guard applies the same lengths | Offline queue and static-demo paths can no longer accept too-short text either |
+| `onError` maps a JSON-shaped message to the existing generic failure copy | No Zod payload can ever reach a resident's screen, now or later |
+| Server `min(5)` / `min(2)` unchanged | Backstop stays; no schema change, no migration |
+
+**Files.** `server/routers.ts`, `client/src/pages/CitizenHome.tsx`, `shared/citizen.ts`, `client/src/index.css`, `server/citizen-emergency-alert.test.ts` (new). No database change; next migration stays `0016_*`.
+
+**Verification.** `tsc --noEmit` clean; production build clean (css `index-DIQJgcs3.css`, bundle `index-1Pk47xE4.js`, server `dist/index.js` 187.0 kB); full suite 296/296 (no re-runs; the new test asserts the description sits inside the `createAlert` payload); built artefacts confirmed to contain the hint copy in both languages and the new alert template in the server bundle; EOL checks clean (index.css ends LF, no trailing newline); secret scan of the diff clean. Live smoke gate runs at deploy time; confirming the alert text on a real responder login is the reporter's check on the deployed build.
+
+**Residual.** The citizen realtime incident feed (`toCitizenEmergencyNotification`) still omits the description — accepted this round because the approved scope was the responder alert; one `description` field addition would cover it if the client wants it later. Admin `notifyResponders` from the incident map likewise carries no description (its input has no such field). The JSON-shape guard is client-side only: direct API callers still receive Zod's structured error, which is an API contract, not UI.

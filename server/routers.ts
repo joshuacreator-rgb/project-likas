@@ -1212,7 +1212,7 @@ export const appRouter = router({
           try {
             const responderAlert = await createAlert({
               title: `${input.priority} citizen emergency`,
-              message: `${input.reportType} reported at ${input.location}.${coordinates}`,
+              message: `${input.reportType} reported at ${input.location}: ${input.description}.${coordinates}`,
               alertType: "CITIZEN_EMERGENCY",
               priority: input.priority,
               targetAudience: "RESPONDERS",
