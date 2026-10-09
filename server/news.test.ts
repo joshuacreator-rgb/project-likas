@@ -135,12 +135,18 @@ describe("news router", () => {
   });
 
   it("maps NewsAPI results into the citizen shape", async () => {
-    process.env.NEWS_API_KEY = "test-news-key";
-    stubFetchWith(NEWS_PAYLOAD);
-    const result = await appRouter.createCaller(anonymousContext()).news.articles();
-    expect(result).toEqual({ available: true, items: mapNewsArticles(NEWS_PAYLOAD) });
-    expect(fetchCalls).toHaveLength(1);
-    expect(fetchCalls[0]).toContain("newsapi.org/v2/everything");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-09T07:21:26.000Z"));
+    try {
+      process.env.NEWS_API_KEY = "test-news-key";
+      stubFetchWith(NEWS_PAYLOAD);
+      const result = await appRouter.createCaller(anonymousContext()).news.articles();
+      expect(result).toEqual({ available: true, items: mapNewsArticles(NEWS_PAYLOAD) });
+      expect(fetchCalls).toHaveLength(1);
+      expect(fetchCalls[0]).toContain("newsapi.org/v2/everything");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports unavailable when the upstream call fails", async () => {
