@@ -112,7 +112,7 @@ import {
   verifyUserTotp,
 } from "./db";
 import { accessDenialReason, canAccessReport } from "./report-access";
-import { broadcastAlert, broadcastAlertEnded, broadcastAssignment, broadcastEvacuee, broadcastIncident } from "./_core/realtime";
+import { broadcastAlert, broadcastAlertEnded, broadcastAssignment, broadcastCenter, broadcastEvacuee, broadcastIncident } from "./_core/realtime";
 import { toCitizenEmergencyNotification } from "../shared/citizen";
 import {
   adviceCategoryOrder,
@@ -1827,6 +1827,7 @@ export const appRouter = router({
           entityType: "evacuation_center",
           entityId: input.centerId,
         });
+        broadcastCenter({ centerId: input.centerId, action: "ARCHIVED" });
         return result;
       }),
     assignCenterStaff: adminProcedure
@@ -1852,6 +1853,7 @@ export const appRouter = router({
         const result = await upsertCenter(input);
         if (ctx.user.role === "staff") await assignCenterStaff(result.id, ctx.user.id);
         await logActivity({ actorId: ctx.user.id, action: "CREATE", entityType: "evacuation_center", entityId: result.id });
+        broadcastCenter({ centerId: result.id, action: "CREATED" });
         return result;
       }),
     createResource: roleProcedure(["admin", "staff"])
@@ -1905,6 +1907,7 @@ export const appRouter = router({
           throw new TRPCError({ code: "FORBIDDEN", message: "You can only manage your assigned evacuation center." });
         const result = await upsertCenter(input.data as typeof import("../drizzle/schema").evacuationCenters.$inferInsert, input.id);
         await logActivity({ actorId: ctx.user.id, action: "UPDATE", entityType: "evacuation_center", entityId: input.id });
+        broadcastCenter({ centerId: input.id, action: "UPDATED" });
         return result;
       }),
     createAlert: adminProcedure

@@ -2,6 +2,7 @@ import type {
   CitizenEmergencyNotification,
   RealtimeAlert,
   RealtimeAssignment,
+  RealtimeCenterEvent,
   RealtimeEvacueeEvent,
   RealtimeStreamPayload,
 } from "../../shared/citizen";
@@ -72,4 +73,13 @@ export function broadcastAssignment(assignment: RealtimeAssignment) {
  */
 export function broadcastEvacuee(event: RealtimeEvacueeEvent) {
   deliver({ type: "evacuee", data: event }, ["staff", "admin"]);
+}
+
+/**
+ * Evacuation-center changes (created, capacity/occupancy edited, archived)
+ * reach every open staff/admin dashboard so occupancy and center lists stay
+ * in sync even when the change originates from another session.
+ */
+export function broadcastCenter(event: RealtimeCenterEvent) {
+  deliver({ type: "center", data: event }, ["staff", "admin"]);
 }

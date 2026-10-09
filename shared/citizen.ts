@@ -36,12 +36,17 @@ export type RealtimeEvacueeEvent = {
   centerId: number | null;
   action: "REGISTERED" | "TRANSFERRED" | "RELEASED";
 };
+export type RealtimeCenterEvent = {
+  centerId: number;
+  action: "CREATED" | "UPDATED" | "ARCHIVED";
+};
 export type RealtimeStreamPayload =
   | { type: "connected" }
   | { type: "incident"; data: CitizenEmergencyNotification }
   | { type: "alert"; data: RealtimeAlert }
   | { type: "assignment"; data: RealtimeAssignment }
-  | { type: "evacuee"; data: RealtimeEvacueeEvent };
+  | { type: "evacuee"; data: RealtimeEvacueeEvent }
+  | { type: "center"; data: RealtimeCenterEvent };
 
 import { getRiskReportHeadline } from "./operations";
 

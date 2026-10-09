@@ -404,7 +404,12 @@ export default function Home() {
     () => window.localStorage.getItem("likas-large-text") === "true"
   );
   const isCitizen = user?.role === "citizen" || user?.role === "user";
-  const { data: liveCenters } = trpc.operations.centers.useQuery();
+  const { data: liveCenters } = trpc.operations.centers.useQuery(undefined, {
+    // Occupancy and center status are also pushed over the realtime stream, but
+    // polling while the center/evacuee workspaces are open guarantees the
+    // counts stay truthful even if a stream connection drops.
+    refetchInterval: active === "Evacuation centers" || active === "Evacuees" ? 5000 : false,
+  });
   const [staticCenters, setStaticCenters] = useState<WorkspaceCenter[]>(readStaticCenters);
   const [staticResources, setStaticResources] = useState<WorkspaceResource[]>(readStaticResources);
   const staticSession = isStaticSession();
@@ -465,6 +470,11 @@ export default function Home() {
         utils.operations.evacuees.invalidate();
         utils.operations.summary.invalidate();
         utils.operations.centers.invalidate();
+      } else if (payload.type === "center") {
+        // Center created, edited, or archived in another session. Refresh the
+        // center list and summary occupancy numbers without waiting for a poll.
+        utils.operations.centers.invalidate();
+        utils.operations.summary.invalidate();
       }
     };
     return () => source.close();
@@ -2115,6 +2125,10 @@ function WorkspaceView({
   const [locationPickerOpen, setLocationPickerOpen] = useState(false);
   const [recordAge, setRecordAge] = useState("");
   const [recordSex, setRecordSex] = useState<"FEMALE" | "MALE" | "OTHER" | "UNSPECIFIED">("UNSPECIFIED");
+  const [recordMiddleName, setRecordMiddleName] = useState("");
+  const [recordContact, setRecordContact] = useState("");
+  const [recordAddress, setRecordAddress] = useState("");
+  const [recordBarangay, setRecordBarangay] = useState("");
   const [recordError, setRecordError] = useState("");
   const createCenterMutation = trpc.admin.createCenter.useMutation({ onSuccess: () => { setRecordOpen(false); utils.operations.centers.invalidate(); } });
   const [editingCenter, setEditingCenter] = useState<{ id: number; name: string; currentOccupancy: number; maximumCapacity: number } | null>(null);
@@ -2136,6 +2150,7 @@ function WorkspaceView({
       utils.operations.evacuees.invalidate();
       utils.operations.summary.invalidate();
       utils.operations.centers.invalidate();
+      toast("Evacuee registered.");
     },
   });
   const [transferTargets, setTransferTargets] = useState<Record<number, number>>({});
@@ -2168,15 +2183,28 @@ function WorkspaceView({
     event.preventDefault();
     createAlertMutation.mutate({ title: alertForm.title, message: alertForm.message, alertType: alertForm.alertType, priority: alertForm.priority, targetAudience: alertForm.targetAudience });
   }
-  const canAddRecord = (user?.role === "admin" && (active === "Evacuation centers" || active === "Resources")) || ((user?.role === "staff") && (active === "Evacuation centers" || active === "Evacuees" || active === "Resources"));
+  const canAddRecord = (user?.role === "admin" || user?.role === "staff") && (active === "Evacuation centers" || active === "Evacuees" || active === "Resources");
   const recordTitle = active === "Evacuation centers" ? "Add evacuation center" : active === "Resources" ? "Add resource" : "Register evacuee";
   function closeRecordForm() {
     setRecordOpen(false);
     setRecordError("");
+    setRecordName("");
+    setRecordCategory("");
+    setRecordUnit("");
+    setRecordQuantity("0");
+    setRecordMinimumStock("0");
+    setRecordCenterId("");
+    setRecordEmail("");
+    setRecordAge("");
+    setRecordSex("UNSPECIFIED");
+    setRecordMiddleName("");
+    setRecordContact("");
+    setRecordAddress("");
+    setRecordBarangay("");
+    setLocationPickerOpen(false);
     createCenterMutation.reset();
     createResourceMutation.reset();
     registerEvacueeMutation.reset();
-    setLocationPickerOpen(false);
   }
   function submitRecord(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -2195,7 +2223,11 @@ function WorkspaceView({
       createResourceMutation.mutate({ name: recordName, category: "General", quantity: Number(recordQuantity), unit: recordUnit, minimumStock: Number(recordMinimumStock), centerId: Number(recordCenterId) });
     } else if (active === "Evacuees") {
       if (!recordCenterId) return setRecordError("Select an evacuation center.");
-      registerEvacueeMutation.mutate({ firstName: recordName, lastName: recordCategory, age: Number(recordAge), sex: recordSex, centerId: Number(recordCenterId) });
+      const selected = (centers ?? []).find(center => center.id === Number(recordCenterId));
+      if (!selected) return setRecordError("Select an evacuation center.");
+      if (selected.status !== "OPEN" || selected.currentOccupancy >= selected.maximumCapacity)
+        return setRecordError(selected.currentOccupancy >= selected.maximumCapacity ? `${selected.name} is at full capacity (${selected.currentOccupancy}/${selected.maximumCapacity}).` : `${selected.name} is not open for new evacuees.`);
+      registerEvacueeMutation.mutate({ firstName: recordName, middleName: recordMiddleName || undefined, lastName: recordCategory, age: Number(recordAge), sex: recordSex, contactNumber: recordContact || undefined, address: recordAddress || undefined, barangay: recordBarangay || undefined, centerId: Number(recordCenterId) });
     } else {
       if (isStaticSession()) {
         const nextCenters = [...(centers ?? []), { id: -Date.now(), name: recordName, address: recordCategory, barangay: recordUnit, currentOccupancy: 0, maximumCapacity: Number(recordQuantity), status: "OPEN", latitude: recordLatitude, longitude: recordLongitude }];
@@ -2386,7 +2418,7 @@ function WorkspaceView({
     ? workspaceAlertsForRole.map(alert => ({ alertType: alert.alertType, message: alert.message }))
     : [];
   const centerNameById = new Map((centers ?? []).map(center => [center.id, center.name]));
-  const centerOptions = (centers ?? []).filter(center => center.status === "OPEN");
+  const centerOptions = (centers ?? []).filter(center => center.status === "OPEN" && center.currentOccupancy < center.maximumCapacity);
   const visibleEvacueeRows = (evacuees ?? []).filter(evacuee => !normalizedSearch || `${evacuee.firstName} ${evacuee.lastName} ${evacuee.status}`.toLowerCase().includes(normalizedSearch));
   const transferTargetFor = (evacuee: { id: number; centerId: number }) => transferTargets[evacuee.id] ?? centerOptions.find(option => option.id !== evacuee.centerId)?.id ?? 0;
   const workspaceRows = active === "Evacuation centers" && centers !== undefined
@@ -3419,7 +3451,7 @@ function WorkspaceView({
                     >
                       <option value="" disabled>Transfer to…</option>
                       {centerOptions.filter(option => option.id !== visibleEvacueeRows[index].centerId).map(option => (
-                        <option key={option.id} value={option.id}>{option.name}</option>
+                        <option key={option.id} value={option.id}>{option.name} ({option.maximumCapacity - option.currentOccupancy} slots)</option>
                       ))}
                     </select>
                     <Button type="button" variant="outline" disabled={transferEvacueeMutation.isPending || visibleEvacueeRows[index].status !== "ACTIVE" || !transferTargetFor(visibleEvacueeRows[index])} onClick={() => transferEvacueeMutation.mutate({ evacueeId: visibleEvacueeRows[index].id, targetCenterId: transferTargetFor(visibleEvacueeRows[index]) })}>
@@ -3477,10 +3509,15 @@ function WorkspaceView({
               <label>Evacuation center<select value={recordCenterId} onChange={event => setRecordCenterId(event.target.value)} required><option value="">Select a center</option>{centers?.map(center => <option key={center.id} value={center.id}>{center.name}</option>)}</select></label>
             </> : <>
               <label>First name<Input value={recordName} onChange={event => setRecordName(event.target.value)} required /></label>
+              <label>Middle name<Input value={recordMiddleName} onChange={event => setRecordMiddleName(event.target.value)} placeholder="Optional" /></label>
               <label>Last name<Input value={recordCategory} onChange={event => setRecordCategory(event.target.value)} required /></label>
               <label>Age<Input type="number" min="0" max="120" value={recordAge} onChange={event => setRecordAge(event.target.value)} required /></label>
               <label>Sex<select value={recordSex} onChange={event => setRecordSex(event.target.value as typeof recordSex)}><option value="UNSPECIFIED">Unspecified</option><option value="FEMALE">Female</option><option value="MALE">Male</option><option value="OTHER">Other</option></select></label>
-              <label>Evacuation center<select value={recordCenterId} onChange={event => setRecordCenterId(event.target.value)} required><option value="">Select a center</option>{centers?.map(center => <option key={center.id} value={center.id}>{center.name}</option>)}</select></label>
+              <label>Contact number<Input value={recordContact} onChange={event => setRecordContact(event.target.value)} placeholder="09XX-XXX-XXXX · optional" /></label>
+              <label>Address<Input value={recordAddress} onChange={event => setRecordAddress(event.target.value)} placeholder="Street, house number · optional" /></label>
+              <label>Barangay<Input value={recordBarangay} onChange={event => setRecordBarangay(event.target.value)} placeholder="Barangay · optional" /></label>
+              <label>Evacuation center<select value={recordCenterId} onChange={event => setRecordCenterId(event.target.value)} required><option value="">Select a center</option>{centerOptions.map(center => <option key={center.id} value={center.id}>{center.name} ({center.maximumCapacity - center.currentOccupancy} slots)</option>)}</select></label>
+              {centerOptions.length === 0 && <p className="login-error" role="alert">No open evacuation center has space right now. Add a center or free up slots before registering evacuees.</p>}
             </>}
             {(recordError || createCenterMutation.error || createResourceMutation.error || registerEvacueeMutation.error) && <p className="login-error" role="alert">{recordError || createCenterMutation.error?.message || createResourceMutation.error?.message || registerEvacueeMutation.error?.message}</p>}
             <div className="modal-actions"><Button type="button" variant="outline" onClick={closeRecordForm}>Cancel</Button><Button type="submit" disabled={createCenterMutation.isPending || createResourceMutation.isPending || registerEvacueeMutation.isPending}>Save record</Button></div>
