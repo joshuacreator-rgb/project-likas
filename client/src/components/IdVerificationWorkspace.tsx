@@ -164,28 +164,24 @@ export default function IdVerificationWorkspace({ role }: Props) {
   // before they commit to it.
   const typedAddress = addressOnId.trim();
   const liveResidency = evaluatePaterosResidency(typedAddress);
-  const cleanPaterosMatch =
-    liveResidency.isPaterosResident &&
-    !liveResidency.mentionsPaterosWithoutBarangay &&
-    typedAddress.length >= 8;
+  // Client feedback (2026-10-09): "automatically approved when verified as a
+  // Pateros residence" means the address printed on the ID, as the reviewer
+  // types it — not only when a barangay name is present. A barangay match or an
+  // address that names Pateros on its own both auto-approve; an address with no
+  // Pateros reference stays with the reviewer's buttons. The effect below and
+  // the note under the address field both key off `liveResidency`.
 
   // Auto-approve (client request): once the reviewer finishes typing an address
-  // on the ID that unmistakably matches one of Pateros's ten barangays, the
-  // application approves itself through the same audited review mutation the
-  // Approve button calls. The short pause after typing separates intent from
-  // in-progress input. The fuzzy cases — an address that names Pateros without
-  // a barangay, or one the matcher does not recognise — deliberately stay with
-  // the reviewer's buttons, because approving those needs a human's eye.
+  // that verifies as a Pateros residence, the application approves itself
+  // through the same audited review mutation the Approve button calls. The
+  // short pause after typing separates intent from in-progress input. An
+  // address with no Pateros reference stays with the reviewer's buttons.
   useEffect(() => {
     if (!editing || status !== "PENDING" || reviewMutation.isPending) return;
     const row = rows.find(candidate => candidate.id === editing);
     if (!row || row.status !== "PENDING") return;
     const residency = evaluatePaterosResidency(addressOnId.trim());
-    const clean =
-      residency.isPaterosResident &&
-      !residency.mentionsPaterosWithoutBarangay &&
-      addressOnId.trim().length >= 8;
-    if (!clean) return;
+    if (!residency.isPaterosResident || !addressOnId.trim()) return;
     const timer = window.setTimeout(() => decide(row, "APPROVED"), 900);
     return () => window.clearTimeout(timer);
   }, [editing, status, rows, addressOnId, idType, idNumber, reviewMutation.isPending]);
@@ -389,16 +385,16 @@ export default function IdVerificationWorkspace({ role }: Props) {
                       maxLength={300}
                     />
                   </label>
-                  {cleanPaterosMatch ? (
+                  {liveResidency.barangay ? (
                     <p className="id-auto-approve-note ok" role="status">
                       Verified Pateros barangay: <b>{liveResidency.barangay}</b>. This
                       application will be <b>approved automatically</b> once you stop
                       typing.
                     </p>
-                  ) : liveResidency.isPaterosResident && liveResidency.mentionsPaterosWithoutBarangay ? (
-                    <p className="id-auto-approve-note warn" role="status">
-                      {liveResidency.explanation} Confirm by eye, then use the Approve
-                      button below.
+                  ) : liveResidency.mentionsPaterosWithoutBarangay ? (
+                    <p className="id-auto-approve-note ok" role="status">
+                      Address verified as a Pateros residence. This application will be{" "}
+                      <b>approved automatically</b> once you stop typing.
                     </p>
                   ) : typedAddress ? (
                     <p className="id-auto-approve-note" role="status">
