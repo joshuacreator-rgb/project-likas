@@ -3,6 +3,7 @@ import { jwtVerify, SignJWT } from "jose";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
+import { newsRouter } from "./news";
 import {
   adminProcedure,
   protectedProcedure,
@@ -349,6 +350,7 @@ async function attachCitizenIdDocument(input: {
 
 export const appRouter = router({
   system: systemRouter,
+  news: newsRouter,
   /**
    * Citizen Valid ID verification (US-2 / US-3).
    *

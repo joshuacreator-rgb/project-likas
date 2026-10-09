@@ -34,6 +34,9 @@ import {
 } from "@/lib/reportEvidence";
 import RoleOnboarding from "@/components/RoleOnboarding";
 import { VideoFacade } from "@/components/VideoFacade";
+import { NewsTicker } from "@/components/NewsTicker";
+import { DisasterNewsFeed } from "@/components/DisasterNewsFeed";
+import { DisasterVideoFeed } from "@/components/DisasterVideoFeed";
 import { getStaticSession } from "@/lib/staticAuth";
 import "leaflet/dist/leaflet.css";
 import {
@@ -58,6 +61,13 @@ import {
   type CitizenLanguage,
   type RealtimeStreamPayload,
 } from "../../../shared/citizen";
+import {
+  NEWS_REFRESH_MS,
+  toNewsFeedState,
+  type NewsArticle,
+  type NewsFeedState,
+  type NewsVideo,
+} from "../../../shared/news";
 import {
   adviceBodyText,
   adviceCategoriesInUse,
@@ -273,6 +283,17 @@ export default function CitizenHome() {
   });
   // Safety guidance is intentionally ungated: no session is required to read it.
   const { data: publishedAdvice } = trpc.advice.list.useQuery();
+  // Disaster news + videos (§24) arrive through the server-side proxy. The
+  // staleTime mirrors the proxy's own cache, so a page refetch never happens
+  // more than once per 5 minutes - react-query keeps the timestamp bookkeeping.
+  const newsQuery = trpc.news.articles.useQuery(undefined, {
+    staleTime: NEWS_REFRESH_MS,
+    retry: 0,
+  });
+  const videosQuery = trpc.news.videos.useQuery(undefined, {
+    staleTime: NEWS_REFRESH_MS,
+    retry: 0,
+  });
   const [adviceFilter, setAdviceFilter] = useState("ALL");
   const [openAdviceId, setOpenAdviceId] = useState<number | null>(null);
   const [cachedAdvice, setCachedAdvice] = useState<CitizenAdviceRow[]>(readCachedAdvice);
@@ -817,8 +838,22 @@ export default function CitizenHome() {
     );
   }
 
+  const newsState: NewsFeedState<NewsArticle> = toNewsFeedState(
+    newsQuery.data,
+    newsQuery.isLoading
+  );
+  const videoState: NewsFeedState<NewsVideo> = toNewsFeedState(
+    videosQuery.data,
+    videosQuery.isLoading
+  );
+  const newsHeadlines =
+    newsState.status === "ready"
+      ? newsState.items.map(article => article.title)
+      : [];
+
   return (
     <div className={`citizen-app ${largeText ? "large-text" : ""}`}>
+      <NewsTicker headlines={newsHeadlines} language={language} />
       <RoleOnboarding role={user?.role || "citizen"} />
       <header className="citizen-header">
         <div className="citizen-brand">
@@ -1316,6 +1351,8 @@ export default function CitizenHome() {
             })
           )}
         </section>
+        <DisasterVideoFeed state={videoState} language={language} />
+        <DisasterNewsFeed state={newsState} language={language} />
       </main>
       {reportOpen && (
         <div
