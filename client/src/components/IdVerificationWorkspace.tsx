@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CheckCircle2,
   FileText,
@@ -7,10 +7,12 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import {
+  evaluatePaterosResidency,
   formatBytes,
   idDocumentTypes,
   idRejectionReasons,
@@ -134,6 +136,11 @@ export default function IdVerificationWorkspace({ role }: Props) {
         rejectionNote: rejectionNote.trim() || null,
       });
       setEditing(null);
+      if (decision === "APPROVED") {
+        toast.success(`${displayName(row)} is approved as a Pateros resident.`);
+      } else {
+        toast.info(`${displayName(row)}'s application was declined.`);
+      }
     } catch (error) {
       setDecisionError(error instanceof Error ? error.message : "That decision could not be saved.");
     }
@@ -150,6 +157,38 @@ export default function IdVerificationWorkspace({ role }: Props) {
   }
 
   const rows = (queue.data ?? []) as unknown as QueueRow[];
+
+  // Live residency read of the address the reviewer is typing on the ID. The
+  // card badge above only ever reflects what was stored on an earlier review;
+  // this one reacts keystroke-by-keystroke so the reviewer sees the verdict
+  // before they commit to it.
+  const typedAddress = addressOnId.trim();
+  const liveResidency = evaluatePaterosResidency(typedAddress);
+  const cleanPaterosMatch =
+    liveResidency.isPaterosResident &&
+    !liveResidency.mentionsPaterosWithoutBarangay &&
+    typedAddress.length >= 8;
+
+  // Auto-approve (client request): once the reviewer finishes typing an address
+  // on the ID that unmistakably matches one of Pateros's ten barangays, the
+  // application approves itself through the same audited review mutation the
+  // Approve button calls. The short pause after typing separates intent from
+  // in-progress input. The fuzzy cases — an address that names Pateros without
+  // a barangay, or one the matcher does not recognise — deliberately stay with
+  // the reviewer's buttons, because approving those needs a human's eye.
+  useEffect(() => {
+    if (!editing || status !== "PENDING" || reviewMutation.isPending) return;
+    const row = rows.find(candidate => candidate.id === editing);
+    if (!row || row.status !== "PENDING") return;
+    const residency = evaluatePaterosResidency(addressOnId.trim());
+    const clean =
+      residency.isPaterosResident &&
+      !residency.mentionsPaterosWithoutBarangay &&
+      addressOnId.trim().length >= 8;
+    if (!clean) return;
+    const timer = window.setTimeout(() => decide(row, "APPROVED"), 900);
+    return () => window.clearTimeout(timer);
+  }, [editing, status, rows, addressOnId, idType, idNumber, reviewMutation.isPending]);
 
   return (
     <section className="workspace-view panel">
@@ -342,11 +381,31 @@ export default function IdVerificationWorkspace({ role }: Props) {
                     Address on the ID
                     <Input
                       value={addressOnId}
-                      onChange={event => setAddressOnId(event.target.value)}
+                      onChange={event => {
+                        setAddressOnId(event.target.value);
+                        setDecisionError("");
+                      }}
                       placeholder="Copy the address exactly as printed on the ID"
                       maxLength={300}
                     />
                   </label>
+                  {cleanPaterosMatch ? (
+                    <p className="id-auto-approve-note ok" role="status">
+                      Verified Pateros barangay: <b>{liveResidency.barangay}</b>. This
+                      application will be <b>approved automatically</b> once you stop
+                      typing.
+                    </p>
+                  ) : liveResidency.isPaterosResident && liveResidency.mentionsPaterosWithoutBarangay ? (
+                    <p className="id-auto-approve-note warn" role="status">
+                      {liveResidency.explanation} Confirm by eye, then use the Approve
+                      button below.
+                    </p>
+                  ) : typedAddress ? (
+                    <p className="id-auto-approve-note" role="status">
+                      {liveResidency.explanation} Approve or decline by eye against the
+                      barangay list.
+                    </p>
+                  ) : null}
                   <label>
                     Reason for declining
                     <select
