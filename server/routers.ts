@@ -112,7 +112,7 @@ import {
   verifyUserTotp,
 } from "./db";
 import { accessDenialReason, canAccessReport } from "./report-access";
-import { broadcastAlert, broadcastAssignment, broadcastEvacuee, broadcastIncident } from "./_core/realtime";
+import { broadcastAlert, broadcastAlertEnded, broadcastAssignment, broadcastEvacuee, broadcastIncident } from "./_core/realtime";
 import { toCitizenEmergencyNotification } from "../shared/citizen";
 import {
   adviceCategoryOrder,
@@ -1273,7 +1273,7 @@ export const appRouter = router({
         if (changes.status === "RESOLVED" || changes.status === "REJECTED") {
           const endedAlerts = await endAlertsForReport(reportId);
           for (const endedAlert of endedAlerts) {
-            broadcastAlert(endedAlert, endedAlert.targetAudience);
+            broadcastAlertEnded(endedAlert);
           }
         }
         await logActivity({
@@ -1947,7 +1947,7 @@ export const appRouter = router({
           entityType: "alert",
           entityId: input.alertId,
         });
-        broadcastAlert(ended, ended.targetAudience);
+        broadcastAlertEnded(ended);
         return ended;
       }),
     updateSetting: adminProcedure

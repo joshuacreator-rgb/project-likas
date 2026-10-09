@@ -45,6 +45,19 @@ export function broadcastAlert(
   deliver({ type: "alert", data: alert }, realtimeAudienceRoles(targetAudience));
 }
 
+/**
+ * An ended alert must reach every open dashboard that can display it. The
+ * operations alert center shows a role everything it may see (admins see all),
+ * so ending an alert cannot leave another open view showing it as ACTIVE (the
+ * "alert stays active after the report is done" bug). The targeted audience is
+ * therefore widened with the admin role when the end is broadcast.
+ */
+export function broadcastAlertEnded(alert: RealtimeAlert) {
+  const roles = new Set<string>([...realtimeAudienceRoles(alert.targetAudience)]);
+  roles.add("admin");
+  deliver({ type: "alert", data: alert }, Array.from(roles));
+}
+
 export function broadcastAssignment(assignment: RealtimeAssignment) {
   deliver(
     { type: "assignment", data: assignment },

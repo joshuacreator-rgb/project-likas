@@ -1959,7 +1959,14 @@ function WorkspaceView({
     refetchOnWindowFocus: true,
   });
   const updateRiskReportMutation = trpc.operations.updateRiskReport.useMutation({
-    onSuccess: () => utils.operations.reports.invalidate(),
+    onSuccess: () => {
+      utils.operations.reports.invalidate();
+      // Marking a report done ends its linked alert. Refresh the alert center
+      // and the summary on the acting dashboard too, not just on dashboards
+      // that happen to receive the ended-alert push (backlog §25).
+      utils.operations.alerts.invalidate();
+      utils.operations.summary.invalidate();
+    },
   });
   const incidentReports = isStaticSession() ? staticReports : liveReports;
   const activeIncidentReports = incidentReports?.filter(report => report.status !== "RESOLVED");
