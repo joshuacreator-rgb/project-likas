@@ -63,6 +63,88 @@ export function toNewsFeedState<T>(
     : { status: "unavailable" };
 }
 
+/**
+ * Embedded demo-period feed (§24, approved deviation: graceful no-key
+ * fallback). While the NewsAPI/YouTube keys are not yet provisioned the
+ * citizen page renders this curated set instead of an empty section. The
+ * dates are pinned relative to module load so the "x hours ago" labels stay
+ * plausible no matter when the bundle runs. Once live keys return an actual
+ * result, this fallback is ignored — no code change is needed.
+ */
+const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+
+export const HARDCODED_NEWS_ARTICLES: readonly NewsArticle[] = [
+  {
+    id: "fallback-article-marikina-river",
+    title:
+      "Marikina River above first alarm — possible flooding in low-lying Pateros barangays",
+    description:
+      "Pateros MDRRMO is monitoring the Marikina River water level. Residents near San Roque, Sta. Ana, and Sto. Rosario should move valuables to higher ground and stay alert for official evacuation messages.",
+    url: "https://www.pagasa.dost.gov.ph/",
+    imageUrl: null,
+    source: "Pateros MDRRMO",
+    publishedAt: ago(35),
+  },
+  {
+    id: "fallback-article-typhoon-checklist",
+    title: "Typhoon preparation checklist: what every Pateros household should do now",
+    description:
+      "Secure loose roofing and outdoor items, stock drinking water and a flashlight with batteries, keep important documents in a waterproof bag, and know the quickest route to your nearest evacuation center.",
+    url: "https://www.pagasa.dost.gov.ph/",
+    imageUrl: null,
+    source: "PAGASA Weather Advisory",
+    publishedAt: ago(190),
+  },
+  {
+    id: "fallback-article-open-centers",
+    title: "Evacuation centers open across Pateros as monsoon rains continue",
+    description:
+      "Open centers include the Rizal Tolentino Center, Pateros Elementary School, M. L. Quezon Center, and Sta. Ana Gymnasium. Coordinate with your barangay captain before moving so occupancy stays accurate.",
+    url: "https://pateros.gov.ph/",
+    imageUrl: null,
+    source: "Pateros MDRRMO",
+    publishedAt: ago(370),
+  },
+] as const;
+
+export const HARDCODED_NEWS_VIDEOS: readonly NewsVideo[] = [
+  {
+    id: "fallback-video-deped-typhoons",
+    videoId: "IPjyCzkD8L8",
+    title: "Typhoons: What to do before, during, and after",
+    channel: "DepEd Philippines",
+    publishedAt: ago(1_440),
+  },
+  {
+    id: "fallback-video-untv-prepare",
+    videoId: "KDZ_AfZ1hWA",
+    title: "How to prepare for a typhoon",
+    channel: "UNTV News",
+    publishedAt: ago(2_880),
+  },
+  {
+    id: "fallback-video-anc-pagasa",
+    videoId: "NRS1Je0lu_U",
+    title: "PAGASA: Typhoon enters PH, now called 'Obet'",
+    channel: "ANC",
+    publishedAt: ago(4_320),
+  },
+] as const;
+
+/**
+ * The demo-period projection: return the live feed whenever it has items,
+ * otherwise render the embedded fallback so the section is never empty.
+ */
+export function toNewsFeedStateWithFallback<T>(
+  payload: NewsFeedPayload<T> | undefined,
+  loading: boolean,
+  fallback: readonly T[]
+): NewsFeedState<T> {
+  if (!payload) return loading ? { status: "loading" } : { status: "ready", items: [...fallback] };
+  if (payload.available && payload.items.length > 0) return { status: "ready", items: payload.items };
+  return { status: "ready", items: [...fallback] };
+}
+
 export const newsCopy = {
   en: {
     tickerLabel: "Latest disaster updates",

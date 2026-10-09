@@ -442,11 +442,16 @@ export default function Home() {
         utils.operations.reports.invalidate();
         utils.operations.summary.invalidate();
       } else if (payload.type === "alert") {
-        toast(payload.data.title, {
-          description: payload.data.message,
-          duration: 12000,
-        });
+        if (payload.data.isActive) {
+          toast(payload.data.title, {
+            description: payload.data.message,
+            duration: 12000,
+          });
+        }
+        // Ended alerts carry `isActive: false` — every open dashboard must
+        // drop them, but an ended alert is not news to toast about.
         utils.operations.alerts.invalidate();
+        utils.operations.summary.invalidate();
       } else if (payload.type === "assignment") {
         if (user.role === "responder" && payload.data.assignedResponderId === user.id) {
           toast("You've been assigned an incident", {
@@ -455,6 +460,11 @@ export default function Home() {
           });
         }
         utils.operations.reports.invalidate();
+      } else if (payload.type === "evacuee") {
+        // Registry changes are surfaced instantly on every open dashboard.
+        utils.operations.evacuees.invalidate();
+        utils.operations.summary.invalidate();
+        utils.operations.centers.invalidate();
       }
     };
     return () => source.close();
@@ -1790,6 +1800,10 @@ function WorkspaceView({
   const utils = trpc.useUtils();
   const { data: liveResources } = trpc.operations.resources.useQuery({}, { enabled: active === "Resources" && !isStaticSession() });
   const { data: workspaceAlerts } = trpc.operations.alerts.useQuery(undefined, { enabled: active === "Alerts" && !isStaticSession() });
+  const { data: evacuees } = trpc.operations.evacuees.useQuery({}, {
+    enabled: active === "Evacuees" && !isStaticSession() && (user?.role === "admin" || user?.role === "staff"),
+    refetchInterval: active === "Evacuees" ? 1500 : false,
+  });
   const { data: adviceItems } = trpc.advice.adminList.useQuery(undefined, {
     enabled: active === "Safety advice" && user?.role === "admin" && !isStaticSession(),
   });
@@ -2109,7 +2123,38 @@ function WorkspaceView({
   const [resourceError, setResourceError] = useState("");
   const updateResourceMutation = trpc.admin.updateResource.useMutation({ onSuccess: () => { setEditingResource(null); utils.operations.resources.invalidate(); } });
   const removeResourceMutation = trpc.admin.removeResource.useMutation({ onSuccess: () => utils.operations.resources.invalidate() });
-  const registerEvacueeMutation = trpc.operations.registerEvacuee.useMutation({ onSuccess: () => { setRecordOpen(false); } });
+  const registerEvacueeMutation = trpc.operations.registerEvacuee.useMutation({
+    onSuccess: () => {
+      setRecordOpen(false);
+      utils.operations.evacuees.invalidate();
+      utils.operations.summary.invalidate();
+      utils.operations.centers.invalidate();
+    },
+  });
+  const [transferTargets, setTransferTargets] = useState<Record<number, number>>({});
+  const transferEvacueeMutation = trpc.operations.transferEvacuee.useMutation({
+    onSuccess: () => {
+      utils.operations.evacuees.invalidate();
+      utils.operations.summary.invalidate();
+      utils.operations.centers.invalidate();
+      toast("Evacuee transferred.");
+    },
+  });
+  const releaseEvacueeMutation = trpc.operations.releaseEvacuee.useMutation({
+    onSuccess: () => {
+      utils.operations.evacuees.invalidate();
+      utils.operations.summary.invalidate();
+      utils.operations.centers.invalidate();
+      toast("Evacuee released.");
+    },
+  });
+  const endAlertMutation = trpc.admin.endAlert.useMutation({
+    onSuccess: () => {
+      utils.operations.alerts.invalidate();
+      utils.operations.summary.invalidate();
+      toast("Alert ended.");
+    },
+  });
   const [alertForm, setAlertForm] = useState({ title: "", message: "", alertType: "GENERAL_UPDATE", priority: "MEDIUM" as "LOW" | "MEDIUM" | "HIGH" | "CRITICAL", targetAudience: "ALL_USERS" as "ALL_USERS" | "CITIZENS" | "STAFF" | "RESPONDERS" | "ADMIN" });
   const createAlertMutation = trpc.admin.createAlert.useMutation({ onSuccess: () => { setRecordOpen(false); utils.operations.alerts.invalidate(); } });
   function submitAlert(event: React.FormEvent<HTMLFormElement>) {
@@ -2333,6 +2378,10 @@ function WorkspaceView({
   const alertMessages = active === "Alerts" && workspaceAlerts !== undefined
     ? workspaceAlertsForRole.map(alert => ({ alertType: alert.alertType, message: alert.message }))
     : [];
+  const centerNameById = new Map((centers ?? []).map(center => [center.id, center.name]));
+  const centerOptions = (centers ?? []).filter(center => center.status === "OPEN");
+  const visibleEvacueeRows = (evacuees ?? []).filter(evacuee => !normalizedSearch || `${evacuee.firstName} ${evacuee.lastName} ${evacuee.status}`.toLowerCase().includes(normalizedSearch));
+  const transferTargetFor = (evacuee: { id: number; centerId: number }) => transferTargets[evacuee.id] ?? centerOptions.find(option => option.id !== evacuee.centerId)?.id ?? 0;
   const workspaceRows = active === "Evacuation centers" && centers !== undefined
     ? visibleCenterRows!.map(center => [
         center.name,
@@ -2344,6 +2393,13 @@ function WorkspaceView({
       ? visibleResourceRows.map(resource => [resource.name, `${resource.quantity} ${resource.unit}`, resource.status])
     : active === "Risk reports" && liveReports !== undefined
       ? (filteredLiveReports ?? []).map(report => [report.reportCode, report.reportType, report.location, report.status])
+      : active === "Evacuees" && evacuees !== undefined
+        ? visibleEvacueeRows.map(evacuee => [
+            `${evacuee.firstName} ${evacuee.lastName}`.trim(),
+            centerNameById.get(evacuee.centerId) ?? `Center #${evacuee.centerId}`,
+            new Date(evacuee.registrationDate).toLocaleString(),
+            evacuee.status,
+          ])
       : active === "Alerts" && workspaceAlerts !== undefined
         ? workspaceAlertsForRole.map(alert => [alert.title, alertAudienceLabels[alert.targetAudience] ?? alert.targetAudience, alert.priority, alert.isActive ? "ACTIVE" : "ENDED"])
       : active === "Safety advice" && adviceItems !== undefined
@@ -2354,7 +2410,7 @@ function WorkspaceView({
             adviceStatusLabels[item.status as AdviceStatus] ?? item.status,
           ])
       : view.rows.filter(row => !normalizedSearch || row.some(cell => cell.toLowerCase().includes(normalizedSearch)));
-  const tableColumns = active === "Evacuation centers" || active === "Resources" || active === "Safety advice" ? [...view.columns, "Actions"] : view.columns;
+  const tableColumns = active === "Evacuation centers" || active === "Resources" || active === "Safety advice" || (active === "Evacuees" && evacuees !== undefined && (user?.role === "admin" || user?.role === "staff")) || (active === "Alerts" && user?.role === "admin") ? [...view.columns, "Actions"] : view.columns;
   const reportDestinations = active === "Risk reports" && liveReports !== undefined
     ? (filteredLiveReports ?? []).map(report => report.latitude && report.longitude
       ? `https://www.google.com/maps/dir/?api=1&destination=${report.latitude},${report.longitude}`
@@ -3343,6 +3399,40 @@ function WorkspaceView({
                       deleteAdviceMutation.mutate({ id: adviceItems[index].id });
                     }} disabled={deleteAdviceMutation.isPending}>
                       <Trash2 size={14} /> Delete
+                    </Button>
+                  </td>
+                ) : active === "Evacuees" && visibleEvacueeRows[index] ? (
+                  <td>
+                    <select
+                      className="role-select"
+                      aria-label="Transfer to center"
+                      value={transferTargetFor(visibleEvacueeRows[index]) || ""}
+                      onChange={event => setTransferTargets(previous => ({ ...previous, [visibleEvacueeRows[index].id]: Number(event.target.value) }))}
+                    >
+                      <option value="" disabled>Transfer to…</option>
+                      {centerOptions.filter(option => option.id !== visibleEvacueeRows[index].centerId).map(option => (
+                        <option key={option.id} value={option.id}>{option.name}</option>
+                      ))}
+                    </select>
+                    <Button type="button" variant="outline" disabled={transferEvacueeMutation.isPending || visibleEvacueeRows[index].status !== "ACTIVE" || !transferTargetFor(visibleEvacueeRows[index])} onClick={() => transferEvacueeMutation.mutate({ evacueeId: visibleEvacueeRows[index].id, targetCenterId: transferTargetFor(visibleEvacueeRows[index]) })}>
+                      Transfer
+                    </Button>
+                    <Button type="button" variant="outline" disabled={releaseEvacueeMutation.isPending || visibleEvacueeRows[index].status !== "ACTIVE"} onClick={() => {
+                      const evacuee = visibleEvacueeRows[index];
+                      if (!window.confirm(`Release ${evacuee.firstName} ${evacuee.lastName} from the registry?`)) return;
+                      releaseEvacueeMutation.mutate({ evacueeId: evacuee.id });
+                    }}>
+                      <Trash2 size={14} /> Release
+                    </Button>
+                  </td>
+                ) : active === "Alerts" && user?.role === "admin" && workspaceAlertsForRole[index] ? (
+                  <td>
+                    <Button type="button" variant="outline" disabled={endAlertMutation.isPending} onClick={() => {
+                      const alert = workspaceAlertsForRole[index];
+                      if (!window.confirm(`End "${alert.title}"? It will disappear from every dashboard immediately.`)) return;
+                      endAlertMutation.mutate({ alertId: alert.id });
+                    }}>
+                      <CheckCircle2 size={14} /> End alert
                     </Button>
                   </td>
                 ) : null}

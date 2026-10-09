@@ -86,6 +86,8 @@ import {
   registerLocalUser,
   reviewIdDocument,
   deleteIdDocument,
+  endAlert,
+  endAlertsForReport,
   purgeExpiredIdDocuments,
   updateUserApproval,
   releaseEvacuee,
@@ -110,7 +112,7 @@ import {
   verifyUserTotp,
 } from "./db";
 import { accessDenialReason, canAccessReport } from "./report-access";
-import { broadcastAlert, broadcastAssignment, broadcastIncident } from "./_core/realtime";
+import { broadcastAlert, broadcastAssignment, broadcastEvacuee, broadcastIncident } from "./_core/realtime";
 import { toCitizenEmergencyNotification } from "../shared/citizen";
 import {
   adviceCategoryOrder,
@@ -1094,6 +1096,7 @@ export const appRouter = router({
         if (ctx.user.role === "staff" && !(await listAssignedCenterIds(ctx.user.id)).includes(input.centerId))
           throw new TRPCError({ code: "FORBIDDEN", message: "You can only manage your assigned evacuation center." });
         const result = await registerEvacuee({ ...input, status: "ACTIVE" });
+        broadcastEvacuee({ evacueeId: result.id, centerId: input.centerId, action: "REGISTERED" });
         await logActivity({
           actorId: ctx.user.id,
           action: "CREATE",
@@ -1120,6 +1123,7 @@ export const appRouter = router({
           input.evacueeId,
           input.targetCenterId
         );
+        broadcastEvacuee({ evacueeId: input.evacueeId, centerId: input.targetCenterId, action: "TRANSFERRED" });
         await logActivity({
           actorId: ctx.user.id,
           action: "TRANSFER",
@@ -1138,6 +1142,7 @@ export const appRouter = router({
             throw new TRPCError({ code: "FORBIDDEN", message: "You can only manage evacuees in your assigned center." });
         }
         const result = await releaseEvacuee(input.evacueeId);
+        broadcastEvacuee({ evacueeId: input.evacueeId, centerId: null, action: "RELEASED" });
         await logActivity({
           actorId: ctx.user.id,
           action: "RELEASE",
@@ -1218,6 +1223,7 @@ export const appRouter = router({
               alertType: "CITIZEN_EMERGENCY",
               priority: input.priority,
               targetAudience: "RESPONDERS",
+              reportId: report.id,
               createdBy: ctx.user.id,
             });
             const alert = await getAlertById(responderAlert.id);
@@ -1261,6 +1267,15 @@ export const appRouter = router({
             message: `An incident cannot move from ${report.status} to ${changes.status}.`,
           });
         const result = await updateRiskReport(reportId, changes);
+        // Closing an incident ends the alert that was raised with it. The
+        // broadcast carries `isActive: false`, so every open dashboard drops
+        // the alert the moment the report is done (client fix, backlog §25).
+        if (changes.status === "RESOLVED" || changes.status === "REJECTED") {
+          const endedAlerts = await endAlertsForReport(reportId);
+          for (const endedAlert of endedAlerts) {
+            broadcastAlert(endedAlert, endedAlert.targetAudience);
+          }
+        }
         await logActivity({
           actorId: ctx.user.id,
           action: changes.status
@@ -1919,6 +1934,21 @@ export const appRouter = router({
         const createdAlert = await getAlertById(result.id);
         if (createdAlert) broadcastAlert(createdAlert, createdAlert.targetAudience);
         return result;
+      }),
+    endAlert: adminProcedure
+      .input(z.object({ alertId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const ended = await endAlert(input.alertId);
+        if (!ended)
+          throw new TRPCError({ code: "NOT_FOUND", message: "Alert not found." });
+        await logActivity({
+          actorId: ctx.user.id,
+          action: "END",
+          entityType: "alert",
+          entityId: input.alertId,
+        });
+        broadcastAlert(ended, ended.targetAudience);
+        return ended;
       }),
     updateSetting: adminProcedure
       .input(

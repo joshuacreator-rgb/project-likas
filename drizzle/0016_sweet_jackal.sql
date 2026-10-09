@@ -1,0 +1,2 @@
+ALTER TABLE `alerts` ADD `reportId` int;--> statement-breakpoint
+ALTER TABLE `alerts` ADD CONSTRAINT `alerts_reportId_risk_reports_id_fk` FOREIGN KEY (`reportId`) REFERENCES `risk_reports`(`id`) ON DELETE no action ON UPDATE no action;

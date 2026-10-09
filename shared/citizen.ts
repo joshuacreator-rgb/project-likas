@@ -31,11 +31,17 @@ export type RealtimeAssignment = {
   reportId: number;
   assignedResponderId: number | null;
 };
+export type RealtimeEvacueeEvent = {
+  evacueeId: number;
+  centerId: number | null;
+  action: "REGISTERED" | "TRANSFERRED" | "RELEASED";
+};
 export type RealtimeStreamPayload =
   | { type: "connected" }
   | { type: "incident"; data: CitizenEmergencyNotification }
   | { type: "alert"; data: RealtimeAlert }
-  | { type: "assignment"; data: RealtimeAssignment };
+  | { type: "assignment"; data: RealtimeAssignment }
+  | { type: "evacuee"; data: RealtimeEvacueeEvent };
 
 import { getRiskReportHeadline } from "./operations";
 

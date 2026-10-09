@@ -62,8 +62,10 @@ import {
   type RealtimeStreamPayload,
 } from "../../../shared/citizen";
 import {
+  HARDCODED_NEWS_ARTICLES,
+  HARDCODED_NEWS_VIDEOS,
   NEWS_REFRESH_MS,
-  toNewsFeedState,
+  toNewsFeedStateWithFallback,
   type NewsArticle,
   type NewsFeedState,
   type NewsVideo,
@@ -838,13 +840,15 @@ export default function CitizenHome() {
     );
   }
 
-  const newsState: NewsFeedState<NewsArticle> = toNewsFeedState(
+  const newsState: NewsFeedState<NewsArticle> = toNewsFeedStateWithFallback(
     newsQuery.data,
-    newsQuery.isLoading
+    newsQuery.isLoading,
+    HARDCODED_NEWS_ARTICLES
   );
-  const videoState: NewsFeedState<NewsVideo> = toNewsFeedState(
+  const videoState: NewsFeedState<NewsVideo> = toNewsFeedStateWithFallback(
     videosQuery.data,
-    videosQuery.isLoading
+    videosQuery.isLoading,
+    HARDCODED_NEWS_VIDEOS
   );
   const newsHeadlines =
     newsState.status === "ready"

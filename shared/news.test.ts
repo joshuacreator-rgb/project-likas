@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   filterNewsByCategory,
+  HARDCODED_NEWS_ARTICLES,
+  HARDCODED_NEWS_VIDEOS,
   newsCategoryLabel,
   newsRelativeTime,
   toNewsFeedState,
+  toNewsFeedStateWithFallback,
   truncateNewsText,
   type NewsArticle,
 } from "./news";
@@ -115,5 +118,64 @@ describe("toNewsFeedState", () => {
     expect(
       toNewsFeedState({ available: true, items: [article({})] }, false)
     ).toEqual({ status: "ready", items: [article({})] });
+  });
+});
+
+describe("toNewsFeedStateWithFallback", () => {
+  const fallback: NewsArticle[] = [
+    article({ id: "fb", url: "https://example.com/fb" }),
+  ];
+
+  it("uses the live feed whenever it has items", () => {
+    const live = [article({})];
+    expect(
+      toNewsFeedStateWithFallback({ available: true, items: live }, false, fallback)
+    ).toEqual({ status: "ready", items: live });
+  });
+
+  it("keeps the loading skeleton while the query is in flight", () => {
+    expect(toNewsFeedStateWithFallback(undefined, true, fallback)).toEqual({
+      status: "loading",
+    });
+  });
+
+  it("renders the embedded fallback during the no-key demo period", () => {
+    expect(toNewsFeedStateWithFallback(undefined, false, fallback)).toEqual({
+      status: "ready",
+      items: fallback,
+    });
+    expect(
+      toNewsFeedStateWithFallback({ available: false, items: [] }, false, fallback)
+    ).toEqual({ status: "ready", items: fallback });
+    expect(
+      toNewsFeedStateWithFallback({ available: true, items: [] }, false, fallback)
+    ).toEqual({ status: "ready", items: fallback });
+  });
+});
+
+describe("hardcoded demo-period feed", () => {
+  it("articles have unique ids, https links, and parseable timestamps", () => {
+    const ids = new Set(HARDCODED_NEWS_ARTICLES.map(item => item.id));
+    expect(ids.size).toBe(HARDCODED_NEWS_ARTICLES.length);
+    for (const item of HARDCODED_NEWS_ARTICLES) {
+      expect(item.url).toMatch(/^https:\/\//);
+      expect(Number.isNaN(Date.parse(item.publishedAt))).toBe(false);
+      expect(item.title.length).toBeGreaterThan(10);
+    }
+  });
+
+  it("every category tab has at least one matching fallback article", () => {
+    for (const category of ["FLOOD", "TYPHOON", "WEATHER"] as const) {
+      expect(filterNewsByCategory(HARDCODED_NEWS_ARTICLES, category).length).toBeGreaterThan(0);
+    }
+  });
+
+  it("videos reference distinct 11-character YouTube ids", () => {
+    const ids = new Set(HARDCODED_NEWS_VIDEOS.map(item => item.videoId));
+    expect(ids.size).toBe(HARDCODED_NEWS_VIDEOS.length);
+    for (const item of HARDCODED_NEWS_VIDEOS) {
+      expect(item.videoId).toMatch(/^[A-Za-z0-9_-]{11}$/);
+      expect(Number.isNaN(Date.parse(item.publishedAt))).toBe(false);
+    }
   });
 });

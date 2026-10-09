@@ -2,6 +2,7 @@ import type {
   CitizenEmergencyNotification,
   RealtimeAlert,
   RealtimeAssignment,
+  RealtimeEvacueeEvent,
   RealtimeStreamPayload,
 } from "../../shared/citizen";
 import { realtimeAudienceRoles } from "../../shared/citizen";
@@ -49,4 +50,13 @@ export function broadcastAssignment(assignment: RealtimeAssignment) {
     { type: "assignment", data: assignment },
     ["responder", "staff", "admin"]
   );
+}
+
+/**
+ * Registry changes reach the people who run the registry: staff and admins.
+ * Their open dashboards drop the stale list and refetch within the same
+ * moment the occupancy count also changes.
+ */
+export function broadcastEvacuee(event: RealtimeEvacueeEvent) {
+  deliver({ type: "evacuee", data: event }, ["staff", "admin"]);
 }

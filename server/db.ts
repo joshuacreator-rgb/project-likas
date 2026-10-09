@@ -92,6 +92,30 @@ export async function listAlerts() { const db = await getDb(); if (!db) return [
 export async function getAlertById(id: number) { const db = await getDb(); if (!db) return undefined; const rows = await db.select().from(alerts).where(eq(alerts.id, id)).limit(1); return rows[0]; }
 export async function logActivity(input: typeof activityLogs.$inferInsert) { const db = await getDb(); if (!db) throw new Error("Database unavailable"); await db.insert(activityLogs).values(input); }
 export async function createAlert(input: typeof alerts.$inferInsert) { const db = await getDb(); if (!db) throw new Error("Database unavailable"); const [created] = await db.insert(alerts).values(input).$returningId(); const delivery = resolveNotificationDelivery({ emailConfigured: Boolean(process.env.EMAIL_PROVIDER_KEY), smsConfigured: Boolean(process.env.SMS_PROVIDER_KEY) }); return { ...created, delivery }; }
+export async function endAlert(alertId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const rows = await db.select().from(alerts).where(eq(alerts.id, alertId)).limit(1);
+  const alert = rows[0];
+  if (!alert) return undefined;
+  if (!alert.isActive) return { ...alert, isActive: false as const };
+  await db.update(alerts).set({ isActive: false }).where(eq(alerts.id, alertId));
+  return { ...alert, isActive: false as const };
+}
+/**
+ * Ends every live alert linked to a citizen report. The eventual
+ * "done" state of an incident must not leave its CITIZEN_EMERGENCY alert
+ * active behind it; the returned rows carry `isActive: false` so callers can
+ * broadcast the ended state straight to open dashboards.
+ */
+export async function endAlertsForReport(reportId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const rows = await db.select().from(alerts).where(and(eq(alerts.reportId, reportId), eq(alerts.isActive, true)));
+  if (!rows.length) return [];
+  await db.update(alerts).set({ isActive: false }).where(and(eq(alerts.reportId, reportId), eq(alerts.isActive, true)));
+  return rows.map(row => ({ ...row, isActive: false as const }));
+}
 export async function uploadEvidence(input: { reportId: number; userId: number; fileName: string; dataBase64: string }) { const { bytes, mimeType } = prepareEvidencePayload(input.dataBase64); const db = await getDb(); if (!db) throw new Error("Database unavailable"); const cleanName = input.fileName.replace(/[^a-zA-Z0-9._-]/g, "_"); const stored = await storagePut(`risk-reports/${input.reportId}/${input.userId}-${cleanName}`, bytes, mimeType); await db.delete(evidenceFiles).where(and(eq(evidenceFiles.reportId, input.reportId), eq(evidenceFiles.fileName, cleanName), eq(evidenceFiles.status, "FAILED"))); const [created] = await db.insert(evidenceFiles).values({ reportId: input.reportId, fileKey: stored.key, fileUrl: stored.url, fileName: cleanName, mimeType, sizeBytes: bytes.byteLength, status: "STORED" }).$returningId(); return { ...created, url: `/api/files/evidence/${created.id}`, mimeType }; }
 
 /**
