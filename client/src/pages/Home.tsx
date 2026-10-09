@@ -3414,6 +3414,7 @@ function WorkspaceView({
                       className="role-select"
                       aria-label="Transfer to center"
                       value={transferTargetFor(visibleEvacueeRows[index]) || ""}
+                      disabled={visibleEvacueeRows[index].status !== "ACTIVE" || !transferTargetFor(visibleEvacueeRows[index])}
                       onChange={event => setTransferTargets(previous => ({ ...previous, [visibleEvacueeRows[index].id]: Number(event.target.value) }))}
                     >
                       <option value="" disabled>Transfer to…</option>
@@ -3431,6 +3432,11 @@ function WorkspaceView({
                     }}>
                       <Trash2 size={14} /> Release
                     </Button>
+                    {visibleEvacueeRows[index].status !== "ACTIVE" ? (
+                      <div className="evacuee-actions-hint">Only active evacuees can be transferred or released.</div>
+                    ) : !transferTargetFor(visibleEvacueeRows[index]) ? (
+                      <div className="evacuee-actions-hint">No other open center can accept a transfer right now.</div>
+                    ) : null}
                   </td>
                 ) : active === "Alerts" && user?.role === "admin" && workspaceAlertsForRole[index] ? (
                   <td>
