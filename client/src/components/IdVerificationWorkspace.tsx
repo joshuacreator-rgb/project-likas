@@ -117,7 +117,12 @@ export default function IdVerificationWorkspace({ role }: Props) {
     setEditing(row.id);
     setIdType("");
     setIdNumber("");
-    setAddressOnId("");
+    // Prefill from the address the resident declared at registration: it is the
+    // best first guess at what the ID prints, and it means an application whose
+    // declared home is a verified Pateros residence auto-approves without the
+    // reviewer retyping a whole address. The reviewer can still correct the
+    // field to the exact wording printed on the ID before it approves.
+    setAddressOnId(row.declaredAddress ?? "");
     setRejectionReason("");
     setRejectionNote("");
     setDecisionError("");
@@ -158,10 +163,10 @@ export default function IdVerificationWorkspace({ role }: Props) {
 
   const rows = (queue.data ?? []) as unknown as QueueRow[];
 
-  // Live residency read of the address the reviewer is typing on the ID. The
-  // card badge above only ever reflects what was stored on an earlier review;
-  // this one reacts keystroke-by-keystroke so the reviewer sees the verdict
-  // before they commit to it.
+  // Live residency read of the address under review. The card badge above comes
+  // from the queue, which prefers the ID address a reviewer recorded and falls
+  // back to the declared registration address; this one reacts keystroke-by-
+  // keystroke to whatever the reviewer types (or keeps) in the address field.
   const typedAddress = addressOnId.trim();
   const liveResidency = evaluatePaterosResidency(typedAddress);
   // Client feedback (2026-10-09): "automatically approved when verified as a
@@ -170,6 +175,10 @@ export default function IdVerificationWorkspace({ role }: Props) {
   // address that names Pateros on its own both auto-approve; an address with no
   // Pateros reference stays with the reviewer's buttons. The effect below and
   // the note under the address field both key off `liveResidency`.
+  //
+  // The address field is prefilled from the declared address (see startReview),
+  // so opening the review for a resident whose declared home verifies as
+  // Pateros is enough for the auto-approve below to fire — nothing to retype.
 
   // Auto-approve (client request): once the reviewer finishes typing an address
   // that verifies as a Pateros residence, the application approves itself

@@ -460,10 +460,13 @@ export const appRouter = router({
         });
 
         // Each row carries an advisory read of the address so staff need not
-        // retype it to compare against the Pateros barangays. It advises; it
-        // does not decide, because OQ 2 verifies no ID type and staff judgement
-        // is the only control.
-        return rows.map(row => ({ ...row, residency: evaluatePaterosResidency(row.addressOnId) }));
+        // retype it to compare against the Pateros barangays. The ID address a
+        // reviewer recorded wins when one exists; before a review it falls back
+        // to the address the resident declared at registration, so the queue
+        // never shows "no address recorded" next to a declared Pateros home. It
+        // advises; it does not decide, because OQ 2 verifies no ID type and
+        // staff judgement is the only control.
+        return rows.map(row => ({ ...row, residency: evaluatePaterosResidency(row.addressOnId ?? row.declaredAddress) }));
       }),
 
     /**
