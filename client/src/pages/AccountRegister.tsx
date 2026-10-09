@@ -414,46 +414,49 @@ export default function AccountRegister({
         onSubmit={handleSubmit}
       >
         <div className="registration-name-group">
-          <label>
+          <label htmlFor="reg-first-name">
             First name
-            <Input
-              value={firstName}
-              onChange={event => {
-                setFirstName(event.target.value);
-                register.reset();
-              }}
-              required
-              minLength={2}
-              maxLength={80}
-              autoComplete="given-name"
-            />
           </label>
-          <label>
+          <Input
+            id="reg-first-name"
+            value={firstName}
+            onChange={event => {
+              setFirstName(event.target.value);
+              register.reset();
+            }}
+            required
+            minLength={2}
+            maxLength={80}
+            autoComplete="given-name"
+          />
+          <label htmlFor="reg-middle-name">
             Middle name <span className="field-optional">(optional)</span>
-            <Input
-              value={middleName}
-              onChange={event => {
-                setMiddleName(event.target.value);
-                register.reset();
-              }}
-              maxLength={80}
-              autoComplete="additional-name"
-            />
           </label>
-          <label>
+          <Input
+            id="reg-middle-name"
+            value={middleName}
+            onChange={event => {
+              setMiddleName(event.target.value);
+              register.reset();
+            }}
+            maxLength={80}
+            autoComplete="additional-name"
+          />
+          <label htmlFor="reg-last-name">
             Last name
-            <Input
-              value={lastName}
-              onChange={event => {
-                setLastName(event.target.value);
-                register.reset();
-              }}
-              required
-              minLength={2}
-              maxLength={80}
-              autoComplete="family-name"
-            />
           </label>
+          <Input
+            id="reg-last-name"
+            value={lastName}
+            onChange={event => {
+              setLastName(event.target.value);
+              register.reset();
+            }}
+            required
+            minLength={2}
+            maxLength={80}
+            autoComplete="family-name"
+          />
         </div>
         <label className="registration-address-field">
           Complete address
