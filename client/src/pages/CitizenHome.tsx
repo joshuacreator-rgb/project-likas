@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
-  AlertOctagon,
-  Bell,
   Building2,
   Camera,
   CheckCircle2,
@@ -34,7 +32,6 @@ import {
 } from "@/lib/reportEvidence";
 import RoleOnboarding from "@/components/RoleOnboarding";
 import { VideoFacade } from "@/components/VideoFacade";
-import { NewsTicker } from "@/components/NewsTicker";
 import { DisasterNewsFeed } from "@/components/DisasterNewsFeed";
 import { DisasterVideoFeed } from "@/components/DisasterVideoFeed";
 import { getStaticSession } from "@/lib/staticAuth";
@@ -850,14 +847,9 @@ export default function CitizenHome() {
     videosQuery.isLoading,
     HARDCODED_NEWS_VIDEOS
   );
-  const newsHeadlines =
-    newsState.status === "ready"
-      ? newsState.items.map(article => article.title)
-      : [];
 
   return (
     <div className={`citizen-app ${largeText ? "large-text" : ""}`}>
-      <NewsTicker headlines={newsHeadlines} language={language} />
       <RoleOnboarding role={user?.role || "citizen"} />
       <header className="citizen-header">
         <div className="citizen-brand">
@@ -1190,39 +1182,6 @@ export default function CitizenHome() {
               ))}
             </div>
           )}
-        </section>
-        <section className="citizen-alerts">
-          <div className="citizen-section-head">
-            <div>
-              <span className="eyebrow">{t.updates}</span>
-              <h2>{t.alerts}</h2>
-            </div>
-            <button
-              onClick={() =>
-                speakText(
-                  displayAlerts
-                    .map(alert => `${alert.title}. ${alert.message}`)
-                    .join(" ")
-                )
-              }
-              aria-label={t.readAlerts}
-            >
-              <Volume2 size={20} />
-            </button>
-          </div>
-          {displayAlerts.map(alert => (
-            <article
-              className={`citizen-alert ${alert.priority === "CRITICAL" ? "critical" : ""}`}
-              key={String(alert.title)}
-            >
-              <AlertOctagon size={22} />
-              <div>
-                <strong>{String(alert.title)}</strong>
-                <p>{String(alert.message)}</p>
-              </div>
-              <Bell size={18} />
-            </article>
-          ))}
         </section>
         <section className="citizen-advice" id="safety-advice">
           <div className="citizen-section-head">
