@@ -95,6 +95,10 @@ export default function AccountRegister({
   // would misreport their own status.
   const [approvalRequired, setApprovalRequired] = useState(true);
   const [approvalAccepted, setApprovalAccepted] = useState(false);
+  // True once the server has issued the session after approval. The approval is
+  // a moment worth showing the resident ("you're approved") instead of an
+  // instant redirect, so the confirmation panel stays until they continue.
+  const [approvalLanded, setApprovalLanded] = useState(false);
   const [approvalToken, setApprovalToken] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [notice, setNotice] = useState("");
@@ -139,7 +143,10 @@ export default function AccountRegister({
   );
   const completeApproval = trpc.localAuth.completeApproval.useMutation({
     onSuccess: () => {
-      window.location.href = "/citizen";
+      // Hold the success panel instead of navigating away instantly: the
+      // resident should see that they are approved. The session is already
+      // set, so the Continue button lands them in the app.
+      setApprovalLanded(true);
     },
     onError: error => {
       setApprovalAccepted(false);
@@ -234,6 +241,7 @@ export default function AccountRegister({
     setNotice("");
     setApprovalPending(false);
     setApprovalAccepted(false);
+    setApprovalLanded(false);
     setApprovalRequired(true);
     setApprovalToken("");
     // A new registration deserves a new attempt. Clearing the latch here is what
@@ -371,12 +379,20 @@ export default function AccountRegister({
           </div>
         </>
       )}
-      {approvalPending ? approvalAccepted ? <div className="registration-accepted" role="status" aria-live="polite">
+      {approvalPending ? approvalLanded ? <div className="registration-accepted" role="status" aria-live="polite">
         <div className="registration-accepted-check"><CheckCircle2 size={38} aria-hidden="true" /></div>
         <span className="eyebrow">Approval complete</span>
-        <h2>Your account has been approved!</h2>
-        <p>Redirecting you to your citizen dashboard...</p>
-        <LoaderCircle className="registration-accepted-loader" size={22} aria-label="Opening your dashboard" />
+        <h2>You're approved!</h2>
+        <p>Your Valid ID was verified and your citizen account is now active. You can receive alerts, evacuation-center guidance, and emergency reporting support — and sign in anytime with your email and password.</p>
+        <Button
+          className="registration-accepted-continue"
+          onClick={() => {
+            if (embedded && onClose) { onClose(); return; }
+            window.location.href = "/citizen";
+          }}
+        >
+          Continue to my dashboard <ArrowRight size={15} />
+        </Button>
       </div> : <div className="registration-pending" role="status" aria-live="polite">
         <div className="registration-pending-orbit"><LoaderCircle size={34} aria-hidden="true" /></div>
         <span className="eyebrow">Application received</span>
