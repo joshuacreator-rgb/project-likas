@@ -9,7 +9,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { useAuth } from "./_core/hooks/useAuth";
 import Home from "./pages/Home";
-import { AdminLogin, CitizenLogin, InternalLogin } from "./pages/Login";
+import Login from "./pages/Login";
 import AccountRegister from "./pages/AccountRegister";
 import PasswordRecovery from "./pages/PasswordRecovery";
 import AcceptInvitation from "./pages/AcceptInvitation";
@@ -115,11 +115,11 @@ function RootRedirect() {
 function Router() {
   return (
     <Switch>
-      <Route path={"/login"} component={CitizenLogin} />
-      <Route path={"/admin/login"} component={() => <AdminLogin />} />
-      <Route path={"/staff/login"} component={() => <InternalLogin role="staff" />} />
-      <Route path={"/responder/login"} component={() => <InternalLogin role="responder" />} />
-      <Route path={"/internal/login"} component={() => <InternalLogin allowRoleSelection />} />
+      <Route path={"/login"} component={Login} />
+      <Route path={"/admin/login"} component={() => <Redirect to="/login?role=admin" />} />
+      <Route path={"/staff/login"} component={() => <Redirect to="/login?role=staff" />} />
+      <Route path={"/responder/login"} component={() => <Redirect to="/login?role=responder" />} />
+      <Route path={"/internal/login"} component={() => <Redirect to="/login?role=staff" />} />
       <Route path={"/register"} component={AccountRegister} />
       <Route path={"/recover"} component={PasswordRecovery} />
       <Route path={"/accept-invitation"} component={AcceptInvitation} />

@@ -1,69 +1,114 @@
 import { useState } from "react";
-import { ArrowLeft, ArrowRight, Eye, EyeOff, LoaderCircle, ShieldCheck } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Building2,
+  Eye,
+  EyeOff,
+  HeartHandshake,
+  LoaderCircle,
+  ShieldCheck,
+  Siren,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { startLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
-import { getHomePath } from "../../../shared/roles";
+import { formatRoleLabel, getHomePath, roleBrands } from "../../../shared/roles";
 import { getAuthErrorMessage } from "../../../shared/auth-feedback";
 import {
   authenticateStaticAccount,
   clearStaticDemoRole,
   clearStaticOverrides,
 } from "@/lib/staticAuth";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import AccountRegister from "./AccountRegister";
 import PasswordRecovery from "./PasswordRecovery";
 
-type LoginRole = "admin" | "staff" | "responder" | "citizen";
-type InternalLoginRole = Exclude<LoginRole, "citizen">;
+type AccountRole = "admin" | "staff" | "responder" | "citizen";
+type MarkTone = "teal" | "blue" | "amber" | "rose";
 
-const internalLoginLabels: Record<InternalLoginRole, string> = {
-  admin: "Administrator",
-  staff: "Evacuation Center Staff",
-  responder: "Responder / Disaster Team",
-};
+const loginRoles: { role: AccountRole; icon: typeof ShieldCheck; tone: MarkTone }[] = [
+  { role: "citizen", icon: HeartHandshake, tone: "rose" },
+  { role: "admin", icon: ShieldCheck, tone: "teal" },
+  { role: "staff", icon: Building2, tone: "blue" },
+  { role: "responder", icon: Siren, tone: "amber" },
+];
 
-function resolveInternalRole(): InternalLoginRole {
-  if (typeof window === "undefined") return "admin";
-  const path = window.location.pathname;
-  if (path === "/admin/login") return "admin";
-  if (path === "/staff/login") return "staff";
-  if (path === "/responder/login") return "responder";
-  const requested = new URLSearchParams(window.location.search).get("role");
-  if (requested === "staff" || requested === "responder") return requested;
-  return "staff";
-}
-
-export function CitizenLogin() {
+/**
+ * One sign-in for every account: citizen by default, with a role switch for
+ * admin, evacuation center staff, and responder teams. A `?role=` query param
+ * (e.g. /login?role=admin) preselects the tab so old links keep working.
+ */
+export default function Login() {
   const [, navigate] = useLocation();
+  const [role, setRole] = useState<AccountRole>(resolveInitialRole);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [challengeToken, setChallengeToken] = useState("");
+  const [twoFactorCode, setTwoFactorCode] = useState("");
   const [registrationOpen, setRegistrationOpen] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [oauthError, setOauthError] = useState("");
 
+  const isInternal = role !== "citizen";
+  const isTwoFactorStep = Boolean(challengeToken);
+
   const login = trpc.localAuth.login.useMutation({
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result.requiresTwoFactor) {
+        setChallengeToken(result.challengeToken);
+        return;
+      }
       clearStaticOverrides();
-      navigate("/citizen");
+      navigate(getHomePath(role));
     },
     onError: (error) => {
       if (!import.meta.env.DEV) return;
       const user = authenticateStaticAccount(email, password);
-      if (!user || user.role !== "citizen") return;
+      if (!user || user.role !== role) return;
       clearStaticDemoRole();
       navigate(getHomePath(user.role));
     },
   });
 
-  const oauthConfigured = Boolean(
-    import.meta.env.VITE_OAUTH_PORTAL_URL && import.meta.env.VITE_APP_ID
+  const verifyTwoFactor = trpc.localAuth.verifyTwoFactor.useMutation({
+    onSuccess: () => {
+      clearStaticOverrides();
+      navigate(getHomePath(role));
+    },
+  });
+
+  const isSubmitting = login.isPending || verifyTwoFactor.isPending;
+  const errorMessage = getAuthErrorMessage(
+    (isTwoFactorStep ? verifyTwoFactor.error : login.error)?.message,
+    isTwoFactorStep ? "2fa" : "login",
+    role,
   );
-  const isSubmitting = login.isPending;
-  const errorMessage = getAuthErrorMessage(login.error?.message, "login", "citizen");
+
+  const active = loginRoles.find(option => option.role === role) ?? loginRoles[0];
+  const brand = roleBrands[role];
+  const oauthConfigured = Boolean(import.meta.env.VITE_OAUTH_PORTAL_URL && import.meta.env.VITE_APP_ID);
+
+  function switchRole(next: AccountRole) {
+    if (next === role) return;
+    setRole(next);
+    setChallengeToken("");
+    setTwoFactorCode("");
+    login.reset();
+    verifyTwoFactor.reset();
+    const params = new URLSearchParams(window.location.search);
+    params.set("role", next);
+    window.history.replaceState(null, "", `/login?${params.toString()}`);
+  }
+
+  function restartLogin() {
+    setChallengeToken("");
+    setTwoFactorCode("");
+    login.reset();
+    verifyTwoFactor.reset();
+  }
 
   function handleOAuth() {
     setOauthError("");
@@ -75,9 +120,9 @@ export function CitizenLogin() {
   }
 
   return (
-    <main className="login-page citizen-login-page">
+    <main className={isInternal ? "login-page login-page-internal" : "login-page login-page-citizen"}>
       <div className="login-layout">
-        <section className="login-card citizen-login-card">
+        <section className="login-card unified-login-card">
           <div className="login-brand">
             <div className="brand-mark"><ShieldCheck size={26} /></div>
             <div>
@@ -86,180 +131,41 @@ export function CitizenLogin() {
             </div>
           </div>
 
-          <div className="login-heading">
-            <span className="eyebrow">Public access</span>
-            <h1>Welcome back.</h1>
-            <p>Sign in to check updates, report emergencies, and access support for your community.</p>
-          </div>
-
-          <form className="login-form" aria-busy={isSubmitting} onSubmit={(event) => {
-            event.preventDefault();
-            login.mutate({ email, password, role: "citizen" });
-          }}>
-            <label>
-              Email address
-              <Input
-                id="login-email"
-                type="email"
-                value={email}
-                aria-invalid={Boolean(errorMessage)}
-                onChange={(event) => {
-                  setEmail(event.target.value);
-                  login.reset();
-                }}
-                required
-                autoComplete="email"
-              />
-            </label>
-
-            <label>
-              Password
-              <div className="password-input-wrap">
-                <Input
-                  id="login-password"
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  aria-invalid={Boolean(errorMessage)}
-                  onChange={(event) => {
-                    setPassword(event.target.value);
-                    login.reset();
-                  }}
-                  required
-                  autoComplete="current-password"
-                />
-                <button
-                  type="button"
-                  className="password-toggle"
-                  onClick={() => setShowPassword((value) => !value)}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  title={showPassword ? "Hide password" : "Show password"}
-                >
-                  {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-                </button>
-              </div>
-            </label>
-
-            {(errorMessage || oauthError) && (
-              <div className="login-error" id="login-error" role="alert" aria-live="assertive">
-                <span className="login-error-icon" aria-hidden="true">!</span>
-                <span>{errorMessage || oauthError}</span>
-              </div>
-            )}
-
-            <div className="account-links align-right">
-              <button type="button" onClick={() => setRecoveryOpen(true)}>Forgot password?</button>
-            </div>
-
-            <Button type="submit" disabled={isSubmitting} aria-describedby={errorMessage ? "login-error" : undefined}>
-              {isSubmitting ? (
-                <>
-                  <LoaderCircle className="login-spinner" size={18} aria-hidden="true" />
-                  Signing you in…
-                </>
-              ) : (
-                <>Sign in to Project Likas</>
-              )}
-              {!isSubmitting && <ArrowRight size={18} />}
-            </Button>
-          </form>
-
-          <div className="account-links">
-            <button type="button" onClick={() => setRegistrationOpen(true)}>Register as Citizen</button>
-          </div>
-
-          {oauthConfigured && (
-            <>
-              <div className="login-divider"><span>or</span></div>
-              <Button type="button" variant="outline" onClick={handleOAuth}>
-                Continue with secure platform sign-in
-              </Button>
-            </>
-          )}
-        </section>
-        <p className="login-undernote">Trusted community safety for every household.</p>
-      </div>
-
-      {registrationOpen && <AccountRegister embedded initialRole="citizen" onClose={() => setRegistrationOpen(false)} />}
-      {recoveryOpen && <PasswordRecovery embedded onClose={() => setRecoveryOpen(false)} />}
-    </main>
-  );
-}
-
-export function AdminLogin() {
-  return <InternalLogin role="admin" />;
-}
-
-export function InternalLogin({
-  role: roleOverride,
-  allowRoleSelection = false,
-}: {
-  role?: InternalLoginRole;
-  allowRoleSelection?: boolean;
-}) {
-  const [, navigate] = useLocation();
-  const initialRole = roleOverride ?? resolveInternalRole();
-  const [role, setRole] = useState<InternalLoginRole>(initialRole);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [challengeToken, setChallengeToken] = useState("");
-  const [twoFactorCode, setTwoFactorCode] = useState("");
-  const [recoveryOpen, setRecoveryOpen] = useState(false);
-
-  const login = trpc.localAuth.login.useMutation({
-    onSuccess: (result) => {
-      if (result.requiresTwoFactor) {
-        setChallengeToken(result.challengeToken);
-        return;
-      }
-      clearStaticOverrides();
-      navigate(getHomePath(role));
-    },
-  });
-
-  const verifyTwoFactor = trpc.localAuth.verifyTwoFactor.useMutation({
-    onSuccess: () => {
-      clearStaticOverrides();
-      navigate(getHomePath(role));
-    },
-  });
-
-  const isTwoFactorStep = Boolean(challengeToken);
-  const isSubmitting = login.isPending || verifyTwoFactor.isPending;
-  const errorMessage = getAuthErrorMessage(
-    (isTwoFactorStep ? verifyTwoFactor.error : login.error)?.message,
-    isTwoFactorStep ? "2fa" : "login",
-    role
-  );
-
-  function restartLogin() {
-    setChallengeToken("");
-    setTwoFactorCode("");
-    login.reset();
-    verifyTwoFactor.reset();
-  }
-
-  return (
-    <main className="login-page internal-login-page">
-      <div className="login-layout">
-        <section className="login-card">
-          <div className="login-brand">
-            <div className="brand-mark"><ShieldCheck size={26} /></div>
-            <div>
-              <strong>PROJECT LIKAS</strong>
-              <span>Disaster Response &amp; Community Safety</span>
-            </div>
+          <div className="login-role-switch" role="tablist" aria-label="Sign in as">
+            {loginRoles.map(({ role: option, icon: RoleIcon, tone }) => (
+              <button
+                key={option}
+                type="button"
+                role="tab"
+                aria-selected={option === role}
+                className={`login-role-tab ${option === role ? "active" : ""}`}
+                onClick={() => switchRole(option)}
+              >
+                <span className={`role-choice-mark ${tone}`}><RoleIcon size={17} /></span>
+                <span className="login-role-label">{formatRoleLabel(option)}</span>
+              </button>
+            ))}
           </div>
 
           <div className="login-heading">
-            <span className="eyebrow">{isTwoFactorStep ? "Confirm identity" : `${internalLoginLabels[role]} access`}</span>
+            <span className="eyebrow">{isInternal ? `${formatRoleLabel(role)} access` : "Public access"}</span>
             <h1>{isTwoFactorStep ? "Enter your security code." : "Welcome back."}</h1>
             <p>
-              {isTwoFactorStep
-                ? "Open your authenticator app and enter the 6-digit code to continue."
-                : "Sign in to manage evacuation, response, and recovery operations for your community."}
+              {isInternal
+                ? "Sign in to manage evacuation, response, and recovery operations for your community."
+                : "Sign in to check updates, report emergencies, and access support for your community."}
             </p>
           </div>
+
+          {isInternal && (
+            <div className="login-role-context">
+              <span className={`role-choice-mark ${active.tone}`}>{brand.mark}</span>
+              <div>
+                <span>{brand.organization}</span>
+                <small>{brand.department}</small>
+              </div>
+            </div>
+          )}
 
           <form
             className="login-form"
@@ -273,28 +179,6 @@ export function InternalLogin({
               login.mutate({ email, password, role });
             }}
           >
-            {allowRoleSelection && !isTwoFactorStep && (
-              <label>
-                Role
-                <Select
-                  value={role}
-                  onValueChange={(value) => {
-                    if (value !== "staff" && value !== "responder") return;
-                    setRole(value);
-                    restartLogin();
-                  }}
-                >
-                  <SelectTrigger className="w-full" aria-label="Choose internal role">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="staff">{internalLoginLabels.staff}</SelectItem>
-                    <SelectItem value="responder">{internalLoginLabels.responder}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </label>
-            )}
-
             {isTwoFactorStep ? (
               <label>
                 Authenticator code
@@ -320,7 +204,7 @@ export function InternalLogin({
                 <label>
                   Email address
                   <Input
-                    id="internal-login-email"
+                    id="login-email"
                     type="email"
                     value={email}
                     aria-invalid={Boolean(errorMessage)}
@@ -332,12 +216,11 @@ export function InternalLogin({
                     autoComplete="email"
                   />
                 </label>
-
                 <label>
                   Password
                   <div className="password-input-wrap">
                     <Input
-                      id="internal-login-password"
+                      id="login-password"
                       type={showPassword ? "text" : "password"}
                       value={password}
                       aria-invalid={Boolean(errorMessage)}
@@ -362,10 +245,10 @@ export function InternalLogin({
               </>
             )}
 
-            {(errorMessage || isTwoFactorStep) && (
+            {(errorMessage || oauthError || isTwoFactorStep) && (
               <div className="login-error" id="login-error" role="alert" aria-live="assertive">
                 <span className="login-error-icon" aria-hidden="true">!</span>
-                <span>{errorMessage || "Enter the 6-digit code to continue."}</span>
+                <span>{isTwoFactorStep && !errorMessage ? "Enter the 6-digit code to continue." : errorMessage || oauthError}</span>
               </div>
             )}
 
@@ -387,10 +270,12 @@ export function InternalLogin({
                 </>
               ) : isTwoFactorStep ? (
                 "Verify and continue"
-              ) : (
+              ) : isInternal ? (
                 "Login"
+              ) : (
+                "Sign in to Project Likas"
               )}
-              {!isSubmitting && !isTwoFactorStep && <ArrowRight size={18} />}
+              {!isSubmitting && <ArrowRight size={18} />}
             </Button>
           </form>
 
@@ -399,15 +284,42 @@ export function InternalLogin({
               <ArrowLeft size={16} /> Start over
             </button>
           )}
+
+          {!isInternal ? (
+            <>
+              <div className="account-links">
+                <button type="button" onClick={() => setRegistrationOpen(true)}>Register as Citizen</button>
+              </div>
+              {oauthConfigured && (
+                <>
+                  <div className="login-divider"><span>or</span></div>
+                  <Button type="button" variant="outline" onClick={handleOAuth}>
+                    Continue with secure platform sign-in
+                  </Button>
+                </>
+              )}
+              <p className="login-note">
+                Citizen, Administrator, Center Staff, and Responder teams all sign in here — pick your role above.
+              </p>
+            </>
+          ) : (
+            <p className="login-note">Only authorized personnel use {formatRoleLabel(role)} access.</p>
+          )}
         </section>
-        <p className="login-undernote">Secured access for authorized personnel only.</p>
+        <p className="login-undernote">
+          {isInternal ? "Secured access for authorized personnel only." : "Trusted community safety for every household."}
+        </p>
       </div>
 
+      {registrationOpen && <AccountRegister embedded initialRole="citizen" onClose={() => setRegistrationOpen(false)} />}
       {recoveryOpen && <PasswordRecovery embedded onClose={() => setRecoveryOpen(false)} />}
     </main>
   );
 }
 
-export default function Login() {
-  return <CitizenLogin />;
+function resolveInitialRole(): AccountRole {
+  const requested = new URLSearchParams(window.location.search).get("role");
+  return requested === "admin" || requested === "staff" || requested === "responder" || requested === "citizen"
+    ? requested
+    : "citizen";
 }

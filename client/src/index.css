@@ -265,3 +265,25 @@ button { cursor:pointer; }
 .citizen-video-featured { margin-top:16px; }.citizen-video-list { display:grid; grid-template-columns:repeat(2,1fr); gap:16px; margin-top:16px; }.citizen-video-title { margin:8px 0 0; color:#123c39; font-size:15px; line-height:1.35; }.citizen-video-channel { margin:3px 0 0; color:#617572; font-size:12px; font-weight:600; }
 .citizen-news-skeleton-video { display:block; width:100%; aspect-ratio:16/9; border-radius:12px; }.citizen-news-skeleton-video-small { display:block; width:100%; aspect-ratio:16/9; border-radius:12px; }.citizen-news-skeleton-tab { height:36px; width:72px; border-radius:999px; }.citizen-news-skeleton-image { display:block; width:100%; height:140px; border-radius:0; }.citizen-news-skeleton-line { display:block; height:12px; width:85%; border-radius:6px; }.citizen-news-skeleton-line-short { width:45%; }.citizen-news-skeleton-line-wide { width:100%; }
 @media (max-width:900px) { .citizen-news-grid { grid-template-columns:repeat(2,1fr); } }@media (max-width:640px) { .citizen-news-grid, .citizen-video-list { grid-template-columns:1fr; } }.large-text .citizen-news-card-title, .large-text .citizen-video-title { font-size:17px; }.large-text .citizen-news-card-desc { font-size:15px; }
+
+/* Unified login (citizen default, switchable to admin/staff/responder) */
+.login-page-citizen { background: radial-gradient(circle at 50% -10%, #fdfcfa 0%, #eff4f1 46%, #e7edeb 100%); }
+.login-page-internal { background: radial-gradient(circle at 50% -10%, #f7faf9 0%, #e6efec 46%, #dde7e4 100%); }
+.login-role-switch { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 24px; padding: 6px; background: #eef2f1; border: 1px solid #dfe6e4; border-radius: 16px; }
+.login-role-tab { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 10px 4px 8px; border: 0; border-radius: 12px; background: transparent; color: #55615f; font: inherit; cursor: pointer; transition: background .16s ease, box-shadow .16s ease, color .16s ease, transform .16s ease; }
+.login-role-tab:hover { background: #fafcfb; color: #173f3a; }
+.login-role-tab.active { background: #fff; box-shadow: 0 3px 12px rgba(19, 27, 25, .10); color: #11665e; }
+.login-role-tab:active { transform: scale(.97); }
+.login-role-tab .role-choice-mark { width: 34px; height: 34px; border-radius: 10px; font-size: .56rem; box-shadow: 0 4px 10px rgba(23, 84, 79, .14); }
+.login-role-label { font-size: .7rem; font-weight: 800; letter-spacing: .01em; line-height: 1.18; text-align: center; }
+.login-role-context { display: flex; align-items: center; gap: 12px; margin: 6px 0 2px; padding: 12px 14px; background: #f0f7f5; border: 1px solid #d6e6e1; border-radius: 14px; }
+.login-role-context .role-choice-mark { flex: none; width: 40px; height: 40px; border-radius: 11px; font-size: .6rem; }
+.login-role-context span, .login-role-context small { display: block; }
+.login-role-context div > span { font-size: .76rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: #17574e; }
+.login-role-context small { font-size: .74rem; color: #5f7671; margin-top: 2px; }
+.unified-login-card .login-heading { margin: 26px 0 20px; }
+.unified-login-card .login-heading h1 { font-size: clamp(1.7rem, 4vw, 2.5rem); }
+.account-links.align-right { justify-content: flex-end; }
+.login-back-link { align-self: center; display: inline-flex; align-items: center; gap: 7px; margin-top: 16px; border: 0; background: none; color: #137c70; font: inherit; font-size: .84rem; font-weight: 700; cursor: pointer; padding: 6px 10px; border-radius: 9px; }
+.login-back-link:hover { background: #eef4f2; }
+@media (max-width: 640px) { .login-role-switch { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
