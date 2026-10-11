@@ -99,15 +99,15 @@ function RouteGuard({
 /**
  * The root path renders no dashboard of its own. Authenticated users go
  * straight to their own role's home — a citizen must not be able to open the
- * internal staff dashboard by typing `/`. Anonymous visitors keep the existing
- * sign-in landing (Home renders the DashboardLayout sign-in prompt).
+ * internal staff dashboard by typing `/`. Anonymous visitors land on the public
+ * citizen sign-in so `likas.fyi` opens on the citizen login by default.
  */
 function RootRedirect() {
   const { user, loading, error, refresh } = useAuth();
   if (loading) return <RouteSplash />;
   if (!user) {
     if (error) return <AuthErrorRetry onRetry={refresh} />;
-    return <Home />;
+    return <Redirect to="/login" />;
   }
   return <Redirect to={getHomePath(user.role)} />;
 }
