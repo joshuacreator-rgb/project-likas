@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
+import ImageLightbox from "@/components/ImageLightbox";
 import {
   evaluatePaterosResidency,
   formatBytes,
@@ -104,6 +105,7 @@ export default function IdVerificationWorkspace({ role }: Props) {
   const imageUrl = trpc.idVerification.imageUrl.useMutation();
   const [openImages, setOpenImages] = useState<Record<number, string>>({});
   const [showImageError, setShowImageError] = useState("");
+  const [zoomImage, setZoomImage] = useState<{ src: string; name: string } | null>(null);
 
   const [editing, setEditing] = useState<number | null>(null);
   const [idType, setIdType] = useState<IdDocumentType | "">("");
@@ -332,7 +334,14 @@ export default function IdVerificationWorkspace({ role }: Props) {
                     </a>
                   </div>
                 ) : (
-                  <img className="id-review-image" src={url} alt={`ID uploaded by ${displayName(row)}`} />
+                  <button
+                    type="button"
+                    className="id-review-image-button"
+                    aria-label={`Zoom ID uploaded by ${displayName(row)}`}
+                    onClick={() => setZoomImage({ src: url, name: row.fileName ?? "ID document" })}
+                  >
+                    <img className="id-review-image" src={url} alt={`ID uploaded by ${displayName(row)}`} />
+                  </button>
                 )
               ) : (
                 <Button variant="outline" disabled={imageUrl.isPending} onClick={() => reveal(row)}>
@@ -468,6 +477,12 @@ export default function IdVerificationWorkspace({ role }: Props) {
           );
         })}
       </div>
+      <ImageLightbox
+        open={Boolean(zoomImage)}
+        src={zoomImage?.src ?? null}
+        fileName={zoomImage?.name ?? ""}
+        onClose={() => setZoomImage(null)}
+      />
     </section>
   );
 }

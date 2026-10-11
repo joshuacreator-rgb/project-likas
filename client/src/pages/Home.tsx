@@ -77,6 +77,7 @@ import { toast } from "sonner";
 import CitizenHome from "./CitizenHome";
 import RoleOnboarding from "@/components/RoleOnboarding";
 import IdVerificationWorkspace from "@/components/IdVerificationWorkspace";
+import ImageLightbox from "@/components/ImageLightbox";
 import {
   Bar,
   BarChart,
@@ -403,6 +404,7 @@ export default function Home() {
   const [largeText, setLargeText] = useState(
     () => window.localStorage.getItem("likas-large-text") === "true"
   );
+  const [lightboxImage, setLightboxImage] = useState<{ src: string; name: string } | null>(null);
   const isCitizen = user?.role === "citizen" || user?.role === "user";
   const { data: liveCenters } = trpc.operations.centers.useQuery(undefined, {
     // Occupancy and center status are also pushed over the realtime stream, but
@@ -746,6 +748,12 @@ export default function Home() {
   return (
     <div className={`likas-app internal-shell ${dashboardRole}-shell ${largeText ? "large-text" : ""}`}>
       <RoleOnboarding role={user?.role} />
+      <ImageLightbox
+        open={Boolean(lightboxImage)}
+        src={lightboxImage?.src ?? null}
+        fileName={lightboxImage?.name ?? ""}
+        onClose={() => setLightboxImage(null)}
+      />
       <aside className={`likas-sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="brand-lockup">
           <div className="brand-mark">
@@ -1121,7 +1129,7 @@ export default function Home() {
                         type="category"
                         axisLine={false}
                         tickLine={false}
-                        tick={{ fill: "#687b79", fontSize: 11 }}
+                        tick={{ fill: "#687b79", fontSize: 13 }}
                         width={72}
                       />
                       <Tooltip
@@ -1493,10 +1501,16 @@ export default function Home() {
                       <li key={row.id} className="evidence-item evidence-image">
                         {/* The route serves bytes only after authenticating the
                             session, so a plain <img> to it works without any
-                            separate token or expiration. */}
-                        <a href={row.url} target="_blank" rel="noopener noreferrer" className="evidence-thumb" aria-label={`Open ${row.fileName}`}>
+                            separate token or expiration. Photos open in the
+                            in-app viewer (ImageLightbox) rather than a new tab. */}
+                        <button
+                          type="button"
+                          className="evidence-thumb"
+                          aria-label={`View ${row.fileName}`}
+                          onClick={() => setLightboxImage({ src: row.url!, name: row.fileName })}
+                        >
                           <img src={row.url} alt={row.fileName} loading="lazy" />
-                        </a>
+                        </button>
                         <span className="evidence-name">{row.fileName}</span>
                       </li>
                     ) : row.url ? (
