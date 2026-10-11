@@ -887,9 +887,12 @@ export const appRouter = router({
         z.object({
           email: z.string().email(),
           password: z.string().min(1),
+          // Optional. The unified sign-in omits it and the account's stored role
+          // decides where the user lands. Callers that still pass a role (legacy
+          // portals, tests) keep the mismatch guard below.
           role: z
             .enum(["admin", "staff", "responder", "citizen", "user"])
-            .default("citizen"),
+            .optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -900,7 +903,7 @@ export const appRouter = router({
             code: "UNAUTHORIZED",
             message: "Invalid email or password",
           });
-        if (!isRoleSelectionAllowed(input.role, user.role))
+        if (input.role && !isRoleSelectionAllowed(input.role, user.role))
           throw new TRPCError({
             code: "FORBIDDEN",
             message: `This account is registered as ${user.role}. Choose that role to continue.`,

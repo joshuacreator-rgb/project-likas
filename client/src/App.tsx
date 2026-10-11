@@ -116,10 +116,10 @@ function Router() {
   return (
     <Switch>
       <Route path={"/login"} component={Login} />
-      <Route path={"/admin/login"} component={() => <Redirect to="/login?role=admin" />} />
-      <Route path={"/staff/login"} component={() => <Redirect to="/login?role=staff" />} />
-      <Route path={"/responder/login"} component={() => <Redirect to="/login?role=responder" />} />
-      <Route path={"/internal/login"} component={() => <Redirect to="/login?role=staff" />} />
+      <Route path={"/admin/login"} component={() => <Redirect to="/login" />} />
+      <Route path={"/staff/login"} component={() => <Redirect to="/login" />} />
+      <Route path={"/responder/login"} component={() => <Redirect to="/login" />} />
+      <Route path={"/internal/login"} component={() => <Redirect to="/login" />} />
       <Route path={"/register"} component={AccountRegister} />
       <Route path={"/recover"} component={PasswordRecovery} />
       <Route path={"/accept-invitation"} component={AcceptInvitation} />

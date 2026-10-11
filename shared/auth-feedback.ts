@@ -13,7 +13,7 @@ export function getAuthErrorMessage(
     if (normalized.includes("verification code") || normalized.includes("security challenge")) return "That code was not accepted. Check the six digits in your authenticator app and try again.";
     return "We could not verify that code. Try again or start over.";
   }
-  if (normalized.includes("registered as")) return `${message.trim()} Select the matching role card and try again.`;
+  if (normalized.includes("registered as")) return `${message.trim()} Sign in with the standard sign-in form to continue, or contact an Administrator.`;
   if (normalized.includes("invalid email") || normalized.includes("password")) {
     if (role !== "citizen") {
       return "This operational account is administrator-provisioned. Check your details or ask an Administrator for an invitation or temporary demo account.";

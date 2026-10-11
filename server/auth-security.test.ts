@@ -58,7 +58,7 @@ beforeEach(() => {
 describe("auth security procedures", () => {
   it("maps login and 2FA failures to clear recovery guidance", () => {
     expect(getAuthErrorMessage("Invalid email or password", "login")).toContain("Check your email and password");
-    expect(getAuthErrorMessage("This account is registered as admin", "login")).toContain("Select the matching role card");
+    expect(getAuthErrorMessage("This account is registered as admin", "login")).toContain("standard sign-in form");
     expect(getAuthErrorMessage("The security challenge has expired", "2fa")).toContain("verification window expired");
     expect(getAuthErrorMessage("That verification code is not valid", "2fa")).toContain("authenticator app");
   });

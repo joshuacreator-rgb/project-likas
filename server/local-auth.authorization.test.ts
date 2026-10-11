@@ -51,4 +51,36 @@ describe("localAuth.login role choice", () => {
     },
     20_000,
   );
+
+  it(
+    "auto-detects the stored role when no role is supplied",
+    async () => {
+      const { appRouter } = await import("./routers");
+      const db = await import("./db");
+      vi.mocked(db.verifyLocalCredentials).mockResolvedValue({
+        id: 8,
+        openId: "local:auto",
+        name: "Auto Admin",
+        email: "auto-admin@example.com",
+        loginMethod: "password",
+        role: "admin",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastSignedIn: new Date(),
+      });
+      const ctx = {
+        user: undefined,
+        req: { protocol: "https", headers: {} },
+        res: { cookie: vi.fn(), clearCookie: vi.fn() },
+      } as never;
+      const caller = appRouter.createCaller(ctx);
+      await expect(
+        caller.localAuth.login({
+          email: "auto-admin@example.com",
+          password: "password",
+        }),
+      ).resolves.toMatchObject({ user: { role: "admin" }, requiresTwoFactor: false });
+    },
+    20_000,
+  );
 });
