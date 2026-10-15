@@ -42,6 +42,11 @@ async function run() {
       // Already nullable or unsupported by this MySQL version.
     }
 
+    if (!(await hasColumn(connection, "users", "activeSessionToken"))) {
+      console.log("[incident-migrations] adding activeSessionToken");
+      await connection.query("ALTER TABLE users ADD ctiveSessionToken varchar(128) NULL");
+    }
+
     console.log("[incident-migrations] done");
   } finally {
     await connection.end();

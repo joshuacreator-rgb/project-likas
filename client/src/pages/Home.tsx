@@ -2520,7 +2520,7 @@ function WorkspaceView({
     : [];
   const centerNameById = new Map((centers ?? []).map(center => [center.id, center.name]));
   const centerOptions = (centers ?? []).filter(center => center.status === "OPEN" && center.currentOccupancy < center.maximumCapacity);
-  const visibleEvacueeRows = (evacuees ?? []).filter(evacuee => !normalizedSearch || `${evacuee.firstName} ${evacuee.lastName} ${evacuee.status}`.toLowerCase().includes(normalizedSearch));
+  const visibleEvacueeRows = (evacuees ?? []).slice().sort((a, b) => compareNames(a as any, b as any)).filter(evacuee => !normalizedSearch || `${evacuee.firstName} ${evacuee.lastName} ${evacuee.status}`.toLowerCase().includes(normalizedSearch));
   const transferTargetFor = (evacuee: { id: number; centerId: number | null }) => transferTargets[evacuee.id] ?? (evacuee.centerId != null ? centerOptions.find(option => option.id !== evacuee.centerId)?.id ?? 0 : centerOptions[0]?.id ?? 0);
   const workspaceRows = active === "Evacuation centers" && centers !== undefined
     ? visibleCenterRows!.map(center => [
@@ -2735,8 +2735,9 @@ function WorkspaceView({
       </section>
     );
   if (active === "User & roles") {
-    const users = managedUsers?.length
-      ? managedUsers
+    const sortedManagedUsers = (managedUsers ?? []).slice().sort((a, b) => compareNames(a as any, b as any));
+    const users = sortedManagedUsers.length
+      ? sortedManagedUsers
       : view.rows.map((row, index) => ({
           id: index + 1,
           name: row[0],

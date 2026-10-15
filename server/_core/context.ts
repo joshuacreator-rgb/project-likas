@@ -14,7 +14,7 @@ export async function authenticateRequest(req: CreateExpressContextOptions["req"
     try {
       const verified = await jwtVerify(localSessionToken, new TextEncoder().encode(process.env.JWT_SECRET));
       const userId = Number(verified.payload.sub);
-      if (Number.isInteger(userId)) user = (await getUserById(userId)) ?? null;
+      if (Number.isInteger(userId)) { const found = (await getUserById(userId)) ?? null; const sessionId = typeof verified.payload.sid === 'string' ? verified.payload.sid : null; if (!found || !found.activeSessionToken || !sessionId || found.activeSessionToken === sessionId) user = found; }
     } catch {
       user = null;
     }

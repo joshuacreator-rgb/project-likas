@@ -85,7 +85,7 @@ import {
   registerEvacuee,
   registerHouseholdHead,
   updateEvacueeHousehold,
-  registerLocalUser,
+  setActiveSessionToken,  registerLocalUser,
   reviewIdDocument,
   deleteIdDocument,
   endAlert,
@@ -252,7 +252,9 @@ async function issueLocalSession(
   ctx: { res: any; req: any },
   user: NonNullable<Awaited<ReturnType<typeof verifyLocalCredentials>>>
 ) {
-  const token = await new SignJWT({ role: user.role, email: user.email })
+  const sessionId = crypto.randomUUID();
+  try { await setActiveSessionToken(user.id, sessionId); } catch { /* best effort */ }
+  const token = await new SignJWT({ role: user.role, email: user.email, sid: sessionId })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(String(user.id))
     .setIssuedAt()
@@ -644,8 +646,9 @@ export const appRouter = router({
         }
       );
     }),
-    logout: publicProcedure.mutation(({ ctx }) => {
+    logout: publicProcedure.mutation(async ({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
+      if (ctx.user) { try { await setActiveSessionToken(ctx.user.id, null); } catch { } }
       ctx.res.clearCookie(COOKIE_NAME, cookieOptions);
       ctx.res.clearCookie("likas_session", cookieOptions);
       return { success: true } as const;
