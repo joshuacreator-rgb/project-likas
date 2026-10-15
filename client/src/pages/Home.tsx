@@ -341,6 +341,8 @@ export default function Home() {
   const { user, logout } = useAuth();
   const [, navigate] = useLocation();
   const [active, setActive] = useState("Overview");
+  const [incidentStatusFilter, setIncidentStatusFilter] = useState("ALL");
+  const [evacueeStatusFilter, setEvacueeStatusFilter] = useState("ALL");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportType, setReportType] = useState("");
@@ -875,7 +877,7 @@ export default function Home() {
         <div
           className={`content-wrap ${active !== "Overview" ? "show-secondary" : ""}`}
         >
-          <WorkspaceView active={active} search={search} centers={staticSession ? staticCenters : liveCenters} resources={staticSession ? staticResources : undefined} onStaticCentersChange={setStaticCenters} onStaticResourcesChange={setStaticResources} onOpenIncident={openIncident} />
+          <WorkspaceView active={active} search={search} incidentStatusFilter={incidentStatusFilter} setIncidentStatusFilter={setIncidentStatusFilter} centers={staticSession ? staticCenters : liveCenters} resources={staticSession ? staticResources : undefined} onStaticCentersChange={setStaticCenters} onStaticResourcesChange={setStaticResources} onOpenIncident={openIncident} />
           {active === "Overview" && <>
           <section className="hero-row">
             <div>
@@ -974,6 +976,45 @@ export default function Home() {
                 {unassignedIncidentCount} unassigned
               </small>
             </div>
+          </section>
+
+          <section className="metric-grid">
+            <button type="button" className="metric-card" onClick={() => { setIncidentStatusFilter("ALL"); setActive("Risk reports"); }}>
+              <div className="metric-icon blue"><AlertTriangle size={18} /></div>
+              <span>Total incidents</span>
+              <strong>{liveSummary?.totalReports ?? 0}</strong>
+              <small>View all reports</small>
+            </button>
+            <button type="button" className="metric-card" onClick={() => { setIncidentStatusFilter("PENDING"); setActive("Risk reports"); }}>
+              <div className="metric-icon amber"><AlertTriangle size={18} /></div>
+              <span>Pending incidents</span>
+              <strong>{liveSummary?.pendingIncidents ?? 0}</strong>
+              <small>Needs review</small>
+            </button>
+            <button type="button" className="metric-card" onClick={() => { setIncidentStatusFilter("IN_PROGRESS"); setActive("Risk reports"); }}>
+              <div className="metric-icon blue"><AlertTriangle size={18} /></div>
+              <span>In progress incidents</span>
+              <strong>{liveSummary?.inProgressIncidents ?? 0}</strong>
+              <small>Active response</small>
+            </button>
+            <button type="button" className="metric-card" onClick={() => { setIncidentStatusFilter("RESOLVED"); setActive("Risk reports"); }}>
+              <div className="metric-icon teal"><CheckCircle2 size={18} /></div>
+              <span>Resolved incidents</span>
+              <strong>{liveSummary?.resolvedIncidents ?? 0}</strong>
+              <small>Completed</small>
+            </button>
+            <button type="button" className="metric-card" onClick={() => { setIncidentStatusFilter("REJECTED"); setActive("Risk reports"); }}>
+              <div className="metric-icon rose"><XCircle size={18} /></div>
+              <span>Rejected incidents</span>
+              <strong>{liveSummary?.rejectedIncidents ?? 0}</strong>
+              <small>Closed invalid</small>
+            </button>
+            <button type="button" className="metric-card" onClick={() => { setEvacueeStatusFilter("ALL"); setActive("Evacuees"); }}>
+              <div className="metric-icon teal"><Users size={18} /></div>
+              <span>Registered evacuees</span>
+              <strong>{liveSummary?.evacuees ?? 0}</strong>
+              <small>Total households: {liveSummary?.households ?? 0}</small>
+            </button>
           </section>
 
           <section className="dashboard-grid">
@@ -1814,6 +1855,8 @@ type DemoAccountsWorkspaceProps = {
 function WorkspaceView({
   active,
   search,
+  incidentStatusFilter,
+  setIncidentStatusFilter,
   centers,
   resources,
   onStaticCentersChange,
@@ -1822,6 +1865,8 @@ function WorkspaceView({
 }: {
   active: string;
   search: string;
+  incidentStatusFilter: string;
+  setIncidentStatusFilter: (value: string) => void;
   centers?: WorkspaceCenter[];
   resources?: WorkspaceResource[];
   onStaticCentersChange?: (centers: WorkspaceCenter[]) => void;
@@ -3293,7 +3338,8 @@ function WorkspaceView({
   if (active === "Risk reports") {
     const allReports = isStaticSession() ? staticReports : (liveReports ?? []);
     const filteredReports = allReports.filter(report =>
-      !normalizedSearch || `${report.reportCode} ${report.reportType} ${report.location} ${report.status} ${report.priority}`.toLowerCase().includes(normalizedSearch)
+      (incidentStatusFilter === "ALL" || report.status === incidentStatusFilter) &&
+      (!normalizedSearch || `${report.reportCode} ${report.reportType} ${report.location} ${report.status} ${report.priority}`.toLowerCase().includes(normalizedSearch))
     );
     const priorityColor = (p: string) => p === "CRITICAL" ? "rose" : p === "HIGH" ? "amber" : p === "MEDIUM" ? "blue" : "teal";
     return (
@@ -3303,6 +3349,7 @@ function WorkspaceView({
             <span className="eyebrow">REPORTS DESK</span>
             <h2>Incident reports</h2>
             <p>All submitted risk and emergency reports. Review, update status, and coordinate response.</p>
+            {incidentStatusFilter !== "ALL" && <p className="empty-copy">Filtered by {incidentStatusFilter.replace(/_/g, " ")}. <button type="button" className="incident-timeline-button" onClick={() => setIncidentStatusFilter("ALL")}>Clear filter</button></p>}
           </div>
         </div>
         {updateRiskReportMutation.error && <p className="login-error" role="alert">{updateRiskReportMutation.error.message}</p>}
