@@ -889,7 +889,7 @@ export default function Home() {
         <div
           className={`content-wrap ${active !== "Overview" ? "show-secondary" : ""}`}
         >
-          <WorkspaceView active={active} search={search} incidentStatusFilter={incidentStatusFilter} setIncidentStatusFilter={setIncidentStatusFilter} centers={staticSession ? staticCenters : liveCenters} resources={staticSession ? staticResources : undefined} onStaticCentersChange={setStaticCenters} onStaticResourcesChange={setStaticResources} onOpenIncident={openIncident} />
+          <WorkspaceView active={active} search={search} incidentStatusFilter={incidentStatusFilter} setIncidentStatusFilter={setIncidentStatusFilter} evacueeStatusFilter={evacueeStatusFilter} setEvacueeStatusFilter={setEvacueeStatusFilter} centers={staticSession ? staticCenters : liveCenters} resources={staticSession ? staticResources : undefined} onStaticCentersChange={setStaticCenters} onStaticResourcesChange={setStaticResources} onOpenIncident={openIncident} />
           {active === "Overview" && <>
           <section className="hero-row">
             <div>
@@ -1026,6 +1026,12 @@ export default function Home() {
               <span>Registered evacuees</span>
               <strong>{liveSummary?.evacuees ?? 0}</strong>
               <small>Total households: {liveSummary?.households ?? 0}</small>
+            </button>
+            <button type="button" className="metric-card" onClick={() => { setEvacueeStatusFilter("PENDING"); setActive("Evacuees"); }}>
+              <div className="metric-icon amber"><Users size={18} /></div>
+              <span>Pending placement</span>
+              <strong>{liveSummary?.pendingEvacuees ?? 0}</strong>
+              <small>Awaiting a center</small>
             </button>
           </section>
 
@@ -1869,6 +1875,8 @@ function WorkspaceView({
   search,
   incidentStatusFilter,
   setIncidentStatusFilter,
+  evacueeStatusFilter,
+  setEvacueeStatusFilter,
   centers,
   resources,
   onStaticCentersChange,
@@ -1879,6 +1887,8 @@ function WorkspaceView({
   search: string;
   incidentStatusFilter: string;
   setIncidentStatusFilter: (value: string) => void;
+  evacueeStatusFilter: string;
+  setEvacueeStatusFilter: (value: string) => void;
   centers?: WorkspaceCenter[];
   resources?: WorkspaceResource[];
   onStaticCentersChange?: (centers: WorkspaceCenter[]) => void;
@@ -2532,7 +2542,14 @@ function WorkspaceView({
     : [];
   const centerNameById = new Map((centers ?? []).map(center => [center.id, center.name]));
   const centerOptions = (centers ?? []).filter(center => center.status === "OPEN" && center.currentOccupancy < center.maximumCapacity);
-  const visibleEvacueeRows = (evacuees ?? []).slice().sort((a, b) => compareNames(a as any, b as any)).filter(evacuee => !normalizedSearch || `${evacuee.firstName} ${evacuee.lastName} ${evacuee.status}`.toLowerCase().includes(normalizedSearch));
+  const visibleEvacueeRows = (evacuees ?? []).slice().sort((a, b) => compareNames(a as any, b as any)).filter(evacuee => {
+    const matchesStatus =
+      evacueeStatusFilter === "ALL" ||
+      (evacueeStatusFilter === "PENDING"
+        ? evacuee.status === "ACTIVE" && evacuee.centerId == null
+        : evacuee.status === evacueeStatusFilter);
+    return matchesStatus && (!normalizedSearch || `${evacuee.firstName} ${evacuee.lastName} ${evacuee.status}`.toLowerCase().includes(normalizedSearch));
+  });
   const transferTargetFor = (evacuee: { id: number; centerId: number | null }) => transferTargets[evacuee.id] ?? (evacuee.centerId != null ? centerOptions.find(option => option.id !== evacuee.centerId)?.id ?? 0 : centerOptions[0]?.id ?? 0);
   const workspaceRows = active === "Evacuation centers" && centers !== undefined
     ? visibleCenterRows!.map(center => [
@@ -2636,7 +2653,9 @@ function WorkspaceView({
     return (
       <section className="workspace-view panel">
         <div className="workspace-view-head">
-          <div><span className="eyebrow">PEOPLE REGISTRY</span><h2>Evacuees and households</h2><p>Manage residents and their household membership.</p></div>
+          <div><span className="eyebrow">PEOPLE REGISTRY</span><h2>Evacuees and households</h2><p>Manage residents and their household membership.</p>
+            {evacueeStatusFilter !== "ALL" && <p className="empty-copy">Filtered by {evacueeStatusFilter === "PENDING" ? "pending placement" : evacueeStatusFilter}. <button type="button" className="incident-timeline-button" onClick={() => setEvacueeStatusFilter("ALL")}>Clear filter</button></p>}
+          </div>
         </div>
         <div className="workspace-table-wrap">
           <table className="workspace-table workspace-user-table">
