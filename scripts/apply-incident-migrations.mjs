@@ -44,7 +44,11 @@ async function run() {
 
     if (!(await hasColumn(connection, "users", "activeSessionToken"))) {
       console.log("[incident-migrations] adding activeSessionToken");
-      await connection.query("ALTER TABLE users ADD ctiveSessionToken varchar(128) NULL");
+      if (await hasColumn(connection, "users", "ctiveSessionToken")) {
+        await connection.query("ALTER TABLE `users` CHANGE `ctiveSessionToken` `activeSessionToken` varchar(128) NULL");
+      } else {
+        await connection.query("ALTER TABLE `users` ADD `activeSessionToken` varchar(128) NULL");
+      }
     }
 
     console.log("[incident-migrations] done");
