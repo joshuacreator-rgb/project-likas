@@ -79,6 +79,7 @@ import CitizenHome from "./CitizenHome";
 import RoleOnboarding from "@/components/RoleOnboarding";
 import IdVerificationWorkspace from "@/components/IdVerificationWorkspace";
 import ImageLightbox from "@/components/ImageLightbox";
+import IncidentReportDocument from "@/components/IncidentReportDocument";
 import {
   Bar,
   BarChart,
@@ -220,7 +221,7 @@ function toAdviceCategory(value: string): AdviceCategory {
     : "GENERAL";
 }
 
-type IncidentSummary = {
+export type IncidentSummary = {
   id: string;
   type: string;
   location: string;
@@ -345,6 +346,7 @@ export default function Home() {
   const [evacueeStatusFilter, setEvacueeStatusFilter] = useState("ALL");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  const [incidentReportOpen, setIncidentReportOpen] = useState(false);
   const [reportType, setReportType] = useState("");
   const [reportLocation, setReportLocation] = useState("");
   const [reportLatitude, setReportLatitude] = useState("14.544000");
@@ -751,6 +753,16 @@ export default function Home() {
   return (
     <div className={`likas-app internal-shell ${dashboardRole}-shell ${largeText ? "large-text" : ""}`}>
       <RoleOnboarding role={user?.role} />
+      {incidentReportOpen && selectedIncident && (
+        <IncidentReportDocument
+          incident={selectedIncident}
+          detail={incidentTimeline?.report ?? null}
+          actions={incidentTimeline?.actions ?? []}
+          attachments={evidenceRows?.map(row => ({ id: row.id, fileName: row.fileName, status: row.status })) ?? []}
+          printedBy={user?.name}
+          onClose={() => setIncidentReportOpen(false)}
+        />
+      )}
       <ImageLightbox
         open={Boolean(lightboxImage)}
         src={lightboxImage?.src ?? null}
@@ -1497,7 +1509,7 @@ export default function Home() {
                   <span className="eyebrow">ACTIVITY</span>
                   <h3>Incident timeline</h3>
                 </div>
-                <Button type="button" variant="outline" onClick={() => window.print()}>Print incident</Button>
+                <Button type="button" variant="outline" onClick={() => setIncidentReportOpen(true)}>Print incident</Button>
                 {incidentTimelineLoading && <LoaderCircle className="login-spinner" size={17} aria-label="Loading timeline" />}
               </div>
 
