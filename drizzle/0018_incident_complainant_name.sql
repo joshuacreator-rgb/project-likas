@@ -1,0 +1,1 @@
+ALTER TABLE `risk_reports` ADD `complainantName` varchar(180) NULL;

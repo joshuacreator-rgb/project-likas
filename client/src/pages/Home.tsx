@@ -46,6 +46,7 @@ import {
   Waves,
   Trash2,
   X,
+  XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1446,6 +1447,7 @@ export default function Home() {
               <div><small>Reference</small><strong>{selectedIncident.id}</strong></div>
               <div><small>Priority</small><strong className={`incident-detail-priority ${selectedIncident.color}`}>{selectedIncident.priority}</strong></div>
               <div><small>Location</small><strong>{selectedIncident.location}</strong></div>
+              <div><small>Complainant</small><strong>{incidentTimeline?.report?.complainantName ?? "Awaiting incident details"}</strong></div>
               <div><small>Reported</small><strong>{selectedIncident.time}</strong></div>
             </div>
             <div className="incident-timeline">
@@ -1454,8 +1456,10 @@ export default function Home() {
                   <span className="eyebrow">ACTIVITY</span>
                   <h3>Incident timeline</h3>
                 </div>
+                <Button type="button" variant="outline" onClick={() => window.print()}>Print incident</Button>
                 {incidentTimelineLoading && <LoaderCircle className="login-spinner" size={17} aria-label="Loading timeline" />}
               </div>
+
               <div className="incident-timeline-list">
                 {incidentTimelineError && (
                   <div className="incident-timeline-notice" role="alert">
@@ -1468,6 +1472,10 @@ export default function Home() {
                   <span className="incident-timeline-dot" />
                   <div><strong>Report received</strong><small>{selectedIncident.createdAt ? new Date(selectedIncident.createdAt).toLocaleString() : selectedIncident.time}</small><p>Incident was logged at {selectedIncident.location}.</p></div>
                 </div>
+                {incidentTimeline?.report.reportedAt && <div className="incident-timeline-event"><span className="incident-timeline-dot" /><div><strong>Reported</strong><small>{new Date(incidentTimeline.report.reportedAt).toLocaleString()}</small><p>Official report timestamp.</p></div></div>}
+                {incidentTimeline?.report.respondedAt && <div className="incident-timeline-event"><span className="incident-timeline-dot" /><div><strong>Responded</strong><small>{new Date(incidentTimeline.report.respondedAt).toLocaleString()}</small><p>Responder acknowledged or was dispatched.</p></div></div>}
+                {incidentTimeline?.report.resolvedAt && <div className="incident-timeline-event"><span className="incident-timeline-dot complete" /><div><strong>Resolved</strong><small>{new Date(incidentTimeline.report.resolvedAt).toLocaleString()}</small><p>Incident marked resolved.</p></div></div>}
+                {incidentTimeline?.report.rejectedAt && <div className="incident-timeline-event"><span className="incident-timeline-dot" /><div><strong>Rejected</strong><small>{new Date(incidentTimeline.report.rejectedAt).toLocaleString()}</small><p>Incident marked rejected.</p></div></div>}
                 {incidentTimeline?.report.assignedResponderId && <div className="incident-timeline-event"><span className="incident-timeline-dot" /><div><strong>Responder assigned</strong><small>Assignment recorded</small><p>The incident is assigned to the response team.</p></div></div>}
                 {incidentTimeline?.actions.map(action => <div className="incident-timeline-event" key={action.id}><span className="incident-timeline-dot" /><div><strong>{action.action}</strong><small>{new Date(action.createdAt).toLocaleString()}</small>{action.resourcesUsed && <p>Resources used: {action.resourcesUsed}</p>}{action.arrivalAt && <p>Arrived: {new Date(action.arrivalAt).toLocaleString()}</p>}{action.completedAt && <p>Completed: {new Date(action.completedAt).toLocaleString()}</p>}</div></div>)}
                 {selectedIncident.status === "RESOLVED" && <div className="incident-timeline-event"><span className="incident-timeline-dot complete" /><div><strong>Incident resolved</strong><small>Resolution recorded</small>{selectedIncident.resolution && <p>{selectedIncident.resolution}</p>}</div></div>}
@@ -2025,6 +2033,30 @@ function WorkspaceView({
       return;
     }
     updateRiskReportMutation.mutate({ reportId, status: "RESOLVED" });
+  }
+  function markIncidentRejected(reportId: number) {
+    if (isStaticSession()) {
+      const note = window.prompt("Optional rejection note");
+      const nextReports = (incidentReports ?? []).map(report =>
+        report.id === reportId
+          ? {
+              ...report,
+              status: "REJECTED",
+              resolution: note?.trim() || report.resolution,
+            }
+          : report
+      );
+      window.localStorage.setItem("likas-static-reports", JSON.stringify(nextReports));
+      window.dispatchEvent(new Event("likas-static-reports-changed"));
+      return;
+    }
+    if (!window.confirm("Reject this incident report?")) return;
+    const note = window.prompt("Optional rejection note");
+    updateRiskReportMutation.mutate({
+      reportId,
+      status: "REJECTED",
+      resolution: note?.trim() || undefined,
+    });
   }
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteName, setInviteName] = useState("");
@@ -3328,6 +3360,11 @@ function WorkspaceView({
                     {canTransitionReport(report.status as ReportStatus, "RESOLVED") && (
                       <Button type="button" variant="outline" onClick={() => markIncidentDone(report.id)} disabled={updateRiskReportMutation.isPending}>
                         <CheckCircle2 size={14} /> Mark done
+                      </Button>
+                    )}
+                    {canTransitionReport(report.status as ReportStatus, "REJECTED") && (
+                      <Button type="button" variant="outline" onClick={() => markIncidentRejected(report.id)} disabled={updateRiskReportMutation.isPending}>
+                        <XCircle size={14} /> Reject
                       </Button>
                     )}
                   </>}

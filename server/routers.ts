@@ -179,6 +179,7 @@ const reportInput = z.object({
   reportCode: z.string().min(4).max(32),
   reportType: z.string().min(2).max(80),
   description: z.string().min(5),
+  complainantName: z.string().min(1).max(180).optional(),
   location: z.string().min(2),
   latitude: z.number().optional(),
   longitude: z.number().optional(),
@@ -1206,6 +1207,7 @@ export const appRouter = router({
         const created = await createRiskReport({
           ...input,
           reporterId: ctx.user.id,
+          complainantName: input.complainantName?.trim() || ctx.user.name || undefined,
           latitude: input.latitude?.toString(),
           longitude: input.longitude?.toString(),
         });
@@ -1272,7 +1274,26 @@ export const appRouter = router({
             code: "BAD_REQUEST",
             message: `An incident cannot move from ${report.status} to ${changes.status}.`,
           });
-        const result = await updateRiskReport(reportId, changes);
+        const timestamp = new Date();
+        const updatePayload: typeof changes & {
+          respondedAt?: Date;
+          resolvedAt?: Date;
+          rejectedAt?: Date;
+        } = { ...changes };
+        if (changes.status) {
+          if (changes.status === "VERIFIED" || changes.status === "IN_PROGRESS") {
+            updatePayload.respondedAt = report.respondedAt ?? timestamp;
+          }
+          if (changes.status === "RESOLVED") updatePayload.resolvedAt = timestamp;
+          if (changes.status === "REJECTED") updatePayload.rejectedAt = timestamp;
+        }
+        if (
+          changes.assignedResponderId != null &&
+          changes.assignedResponderId !== report.assignedResponderId
+        ) {
+          updatePayload.respondedAt = report.respondedAt ?? timestamp;
+        }
+        const result = await updateRiskReport(reportId, updatePayload);
         // Closing an incident ends the alert that was raised with it. The
         // broadcast carries `isActive: false`, so every open dashboard drops
         // the alert the moment the report is done (client fix, backlog §25).
@@ -1282,6 +1303,29 @@ export const appRouter = router({
             broadcastAlertEnded(endedAlert);
           }
         }
+        if (changes.status === "REJECTED") {
+          try {
+            const notification = await createAlert({
+              title: `${report.priority} incident rejected`,
+              message: `${report.reportCode || `Incident ${report.id}`} was rejected at ${report.location}: ${report.description}. ${changes.resolution ? `Note: ${changes.resolution}` : "No note provided."}`,
+              alertType: "INCIDENT_REJECTED",
+              priority: report.priority,
+              targetAudience: "ADMIN",
+              reportId: report.id,
+              createdBy: ctx.user.id,
+            });
+            const savedAlert = notification ? await getAlertById(notification.id) : undefined;
+            if (savedAlert) broadcastAlert(savedAlert, savedAlert.targetAudience);
+          } catch (error) {
+            console.warn("[Operations] Incident rejection notification failed:", error);
+          }
+        }
+        broadcastAssignment({
+          reportId,
+          assignedResponderId: changes.status === "RESOLVED" || changes.status === "REJECTED"
+            ? report.assignedResponderId
+            : report.assignedResponderId,
+        });
         await logActivity({
           actorId: ctx.user.id,
           action: changes.status
@@ -1341,19 +1385,65 @@ export const appRouter = router({
           throw new TRPCError({ code: "NOT_FOUND", message: "Incident not found." });
         if (report.status === "RESOLVED" || report.status === "REJECTED")
           throw new TRPCError({ code: "BAD_REQUEST", message: "Closed incidents cannot be reassigned." });
+        if (
+          input.responderId !== null &&
+          report.assignedResponderId != null &&
+          report.assignedResponderId !== input.responderId
+        )
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Incident is already assigned to another responder.",
+          });
         if (input.responderId !== null) {
           const responder = await getUserById(input.responderId);
           if (!responder || responder.role !== "responder")
             throw new TRPCError({ code: "BAD_REQUEST", message: "Choose a responder account." });
         }
-        await updateRiskReport(input.reportId, { assignedResponderId: input.responderId });
+        const now = new Date();
+        const shouldStart = input.responderId !== null && report.status !== "IN_PROGRESS";
+        const updatePayload: Record<string, unknown> = { assignedResponderId: input.responderId };
+        if (shouldStart) {
+          updatePayload.status = "IN_PROGRESS";
+          updatePayload.respondedAt = report.respondedAt ?? now;
+        }
+        await updateRiskReport(input.reportId, updatePayload as Partial<typeof import("../drizzle/schema").riskReports.$inferInsert>);
         await logActivity({
           actorId: ctx.user.id,
           action: input.responderId === null ? "RESPONDER_UNASSIGNED" : "RESPONDER_ASSIGNED",
           entityType: "risk_report",
           entityId: input.reportId,
+          metadata: shouldStart ? JSON.stringify({ status: "IN_PROGRESS" }) : undefined,
         });
+        if (shouldStart) {
+          await logActivity({
+            actorId: ctx.user.id,
+            action: "INCIDENT_STATUS_CHANGED",
+            entityType: "risk_report",
+            entityId: input.reportId,
+            metadata: JSON.stringify({ status: "IN_PROGRESS" }),
+          });
+        }
         broadcastAssignment({ reportId: input.reportId, assignedResponderId: input.responderId });
+        if (input.responderId !== null && report.reportedAt) {
+          try {
+            const coordinates = report.latitude != null && report.longitude != null
+              ? ` Pin: https://www.google.com/maps/search/?api=1&query=${report.latitude},${report.longitude}`
+              : "";
+            const alert = await createAlert({
+              title: `${report.priority} incident assignment`,
+              message: `${report.reportCode || `Incident ${report.id}`} requires responder attention at ${report.location}: ${report.description}. Reporter: ${report.complainantName || "Unknown"}. Reported ${new Date(report.reportedAt).toLocaleString()}.${coordinates}`,
+              alertType: "INCIDENT_ASSIGNMENT",
+              priority: report.priority,
+              targetAudience: "RESPONDERS",
+              reportId: report.id,
+              createdBy: ctx.user.id,
+            });
+            const savedAlert = await getAlertById(alert.id);
+            if (savedAlert) broadcastAlert(savedAlert, savedAlert.targetAudience);
+          } catch (error) {
+            console.warn("[Operations] Responder dispatch notification failed:", error);
+          }
+        }
         return { reportId: input.reportId, assignedResponderId: input.responderId };
       }),
     claimIncident: roleProcedure(["responder"])
