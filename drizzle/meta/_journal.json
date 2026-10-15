@@ -134,6 +134,13 @@
       "when": 1792068210218,
       "tag": "0018_incident_complainant_name",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "5",
+      "when": 1792071182949,
+      "tag": "0019_household_registry",
+      "breakpoints": true
     }
   ]
 }

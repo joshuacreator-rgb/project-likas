@@ -61,7 +61,7 @@ import {
   getLoginPath,
   getRegisterPath,
 } from "../../../shared/roles";
-import { canTransitionReport, alertsVisibleToRole, type ReportStatus } from "../../../shared/operations";
+import { canTransitionReport, alertsVisibleToRole, compareNames, type ReportStatus } from "../../../shared/operations";
 import {
   adviceCategories,
   adviceCategoryOrder,
@@ -1881,6 +1881,9 @@ function WorkspaceView({
     enabled: active === "Evacuees" && !isStaticSession() && (user?.role === "admin" || user?.role === "staff"),
     refetchInterval: active === "Evacuees" ? 1500 : false,
   });
+  const [selectedHouseholdId, setSelectedHouseholdId] = useState<number | null>(null);
+  const [householdNewMemberOpen, setHouseholdNewMemberOpen] = useState(false);
+  const [householdMemberForm, setHouseholdMemberForm] = useState<{ firstName: string; middleName: string; lastName: string; age: number; centerId: number }>({ firstName: "", middleName: "", lastName: "", age: 18, centerId: 0 });
   const { data: adviceItems } = trpc.advice.adminList.useQuery(undefined, {
     enabled: active === "Safety advice" && user?.role === "admin" && !isStaticSession(),
   });
@@ -2261,6 +2264,13 @@ function WorkspaceView({
       toast("Evacuee released.");
     },
   });
+  const assignEvacueeHouseholdMutation = trpc.operations.assignEvacueeHousehold.useMutation({
+    onSuccess: () => {
+      utils.operations.evacuees.invalidate();
+      utils.operations.summary.invalidate();
+      toast("Household updated.");
+    },
+  });
   const endAlertMutation = trpc.admin.endAlert.useMutation({
     onSuccess: () => {
       utils.operations.alerts.invalidate();
@@ -2511,7 +2521,7 @@ function WorkspaceView({
   const centerNameById = new Map((centers ?? []).map(center => [center.id, center.name]));
   const centerOptions = (centers ?? []).filter(center => center.status === "OPEN" && center.currentOccupancy < center.maximumCapacity);
   const visibleEvacueeRows = (evacuees ?? []).filter(evacuee => !normalizedSearch || `${evacuee.firstName} ${evacuee.lastName} ${evacuee.status}`.toLowerCase().includes(normalizedSearch));
-  const transferTargetFor = (evacuee: { id: number; centerId: number }) => transferTargets[evacuee.id] ?? centerOptions.find(option => option.id !== evacuee.centerId)?.id ?? 0;
+  const transferTargetFor = (evacuee: { id: number; centerId: number | null }) => transferTargets[evacuee.id] ?? (evacuee.centerId != null ? centerOptions.find(option => option.id !== evacuee.centerId)?.id ?? 0 : centerOptions[0]?.id ?? 0);
   const workspaceRows = active === "Evacuation centers" && centers !== undefined
     ? visibleCenterRows!.map(center => [
         center.name,
@@ -2526,7 +2536,7 @@ function WorkspaceView({
       : active === "Evacuees" && evacuees !== undefined
         ? visibleEvacueeRows.map(evacuee => [
             `${evacuee.firstName} ${evacuee.lastName}`.trim(),
-            centerNameById.get(evacuee.centerId) ?? `Center #${evacuee.centerId}`,
+            evacuee.centerId == null ? "Unassigned household" : (centerNameById.get(evacuee.centerId) ?? `Center #${evacuee.centerId}`),
             new Date(evacuee.registrationDate).toLocaleString(),
             evacuee.status,
           ])
@@ -2603,6 +2613,86 @@ function WorkspaceView({
         <div className="workspace-note"><ShieldCheck size={15} /> Only audit activity is shown in this workspace.</div>
       </section>
     );
+  if (active === "Evacuees") {
+    const headCandidates = (evacuees ?? [])
+      .filter(candidate => (candidate.householdId ?? candidate.id) === candidate.id)
+      .sort(compareNames as any);
+    const selectedHead = headCandidates.find(candidate => candidate.id === selectedHouseholdId) ?? headCandidates[0] ?? null;
+    const members = selectedHead
+      ? (evacuees ?? []).filter(candidate => candidate.householdId === selectedHead.householdId).sort(compareNames as any)
+      : [];
+    return (
+      <section className="workspace-view panel">
+        <div className="workspace-view-head">
+          <div><span className="eyebrow">PEOPLE REGISTRY</span><h2>Evacuees and households</h2><p>Manage residents and their household membership.</p></div>
+        </div>
+        <div className="workspace-table-wrap">
+          <table className="workspace-table workspace-user-table">
+            <thead><tr><th>Head of household</th><th>Members</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody>
+              {headCandidates.length === 0 && <tr><td colSpan={4}><span className="empty-copy">No household heads registered.</span></td></tr>}
+              {headCandidates.map(head => (
+                <tr key={head.id}>
+                  <td>{head.lastName}, {head.firstName}{head.middleName ? ` ${head.middleName}` : ""}</td>
+                  <td>{(evacuees ?? []).filter(candidate => candidate.householdId === (head.householdId ?? head.id)).length}</td>
+                  <td>{head.status}</td>
+                  <td>
+                    <Button type="button" variant="outline" onClick={() => setSelectedHouseholdId(head.id)}>Manage family</Button>
+                    <Button type="button" variant="outline" onClick={() => {
+                      const value = window.prompt("Full name (Last, First Middle):");
+                      if (!value) return;
+                      const nameParts = value.split(",").map(part => part.trim()).filter(Boolean);
+                      const born = window.prompt("Age:");
+                      const age = Number(born);
+                      if (!Number.isFinite(age)) { window.alert("A valid age is required."); return; }
+                      registerEvacueeMutation.mutate({
+                        firstName: nameParts[1]?.split(/\s+/)[0] || "Unknown",
+                        middleName: nameParts[1]?.split(/\s+/).slice(1).join(" ") || undefined,
+                        lastName: nameParts[0] || "Unknown",
+                        age,
+                        sex: "UNSPECIFIED",
+                        centerId: head.centerId != null ? head.centerId : (centerOptions[0]?.id ?? 1),
+                        householdId: head.householdId ?? head.id,
+                      });
+                    }}>Add member</Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {selectedHead && (
+          <div className="workspace-table-wrap">
+            <h3>Family members of {selectedHead.lastName}, {selectedHead.firstName}</h3>
+            <table className="workspace-table workspace-user-table">
+              <thead><tr><th>Member ID</th><th>Full name</th><th>Age</th><th>Status</th><th>Actions</th></tr></thead>
+              <tbody>
+                {members.find(member => member.id === (selectedHead.householdId ?? selectedHead.id)) && <tr key={selectedHead.id}>
+                  <td>{selectedHead.id}</td>
+                  <td>{selectedHead.lastName}, {selectedHead.firstName}{selectedHead.middleName ? ` ${selectedHead.middleName}` : ""}</td>
+                  <td>{selectedHead.age}</td>
+                  <td>HEAD</td>
+                  <td>-</td>
+                </tr>}
+                {members.filter(member => member.id !== (selectedHead.householdId ?? selectedHead.id)).map(member => (
+                  <tr key={member.id}>
+                    <td>{member.id}</td>
+                    <td>{member.lastName}, {member.firstName}{member.middleName ? ` ${member.middleName}` : ""}</td>
+                    <td>{member.age}</td>
+                    <td>{member.status}</td>
+                    <td><Button type="button" variant="outline" disabled={releaseEvacueeMutation.isPending} onClick={() => {
+                      if (!window.confirm(`Remove ${member.firstName} ${member.lastName} from this household?`)) return;
+                      assignEvacueeHouseholdMutation.mutate({ evacueeId: member.id, householdId: null });
+                    }}>Remove member</Button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    );
+  }
   if (active === "Demo accounts")
     return (
       <DemoAccountsWorkspace

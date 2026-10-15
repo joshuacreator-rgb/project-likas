@@ -83,6 +83,8 @@ import {
   provisionDemoAccounts,
   queueReportExport,
   registerEvacuee,
+  registerHouseholdHead,
+  updateEvacueeHousehold,
   registerLocalUser,
   reviewIdDocument,
   deleteIdDocument,
@@ -200,6 +202,7 @@ const evacueeInput = z.object({
   medicalNotes: z.string().optional(),
   specialNeeds: z.string().optional(),
   centerId: z.number().int().positive(),
+  householdId: z.number().int().positive().nullable().optional(),
 });
 const centerInput = z.object({
   centerCode: z.string().min(2).max(32),
@@ -711,6 +714,19 @@ export const appRouter = router({
           hasValidId: Boolean(input.validId),
         });
 
+        try {
+          await registerHouseholdHead({
+            firstName: input.firstName,
+            middleName: input.middleName?.trim() || null,
+            lastName: input.lastName,
+            age: input.age,
+            phone: input.phone,
+            address: input.address,
+          });
+        } catch (error) {
+          console.warn("[Registration] Household registry population failed:", error);
+        }
+
         // The ID is attached after the account is created, not before.
         //
         // It used to be validated and stored first, so that a bad upload failed
@@ -1123,7 +1139,7 @@ export const appRouter = router({
         if (ctx.user.role === "staff") {
           const centerIds = await listAssignedCenterIds(ctx.user.id);
           const evacuee = await getEvacueeById(input.evacueeId);
-          if (!evacuee || !centerIds.includes(evacuee.centerId) || !centerIds.includes(input.targetCenterId))
+          if (!evacuee || evacuee.centerId == null || !centerIds.includes(evacuee.centerId) || !centerIds.includes(input.targetCenterId))
             throw new TRPCError({ code: "FORBIDDEN", message: "You can only manage evacuees in your assigned center." });
         }
         const result = await transferEvacuee(
@@ -1139,13 +1155,32 @@ export const appRouter = router({
         });
         return result;
       }),
+    assignEvacueeHousehold: roleProcedure(["admin", "staff"])
+      .input(z.object({ evacueeId: z.number().int().positive(), householdId: z.number().int().positive().nullable() }))
+      .mutation(async ({ ctx, input }) => {
+        if (ctx.user.role === "staff") {
+          const centerIds = await listAssignedCenterIds(ctx.user.id);
+          const evacuee = await getEvacueeById(input.evacueeId);
+          if (!evacuee) throw new TRPCError({ code: "NOT_FOUND", message: "Evacuee not found." });
+          if (evacuee.centerId != null && !centerIds.includes(evacuee.centerId))
+            throw new TRPCError({ code: "FORBIDDEN", message: "You can only manage evacuees in your assigned evacuation center." });
+        }
+        if (input.householdId != null) {
+          const head = await getEvacueeById(input.householdId);
+          if (!head) throw new TRPCError({ code: "NOT_FOUND", message: "Household head not found." });
+        }
+        const result = await updateEvacueeHousehold(input.evacueeId, input.householdId);
+        broadcastEvacuee({ evacueeId: input.evacueeId, centerId: 0, action: "REGISTERED" });
+        await logActivity({ actorId: ctx.user.id, action: input.householdId == null ? "HOUSEHOLD_MEMBER_REMOVED" : "HOUSEHOLD_MEMBER_ASSIGNED", entityType: "evacuee", entityId: input.evacueeId });
+        return result;
+      }),
     releaseEvacuee: roleProcedure(["admin", "staff"])
       .input(z.object({ evacueeId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
         if (ctx.user.role === "staff") {
           const centerIds = await listAssignedCenterIds(ctx.user.id);
           const evacuee = await getEvacueeById(input.evacueeId);
-          if (!evacuee || !centerIds.includes(evacuee.centerId))
+          if (!evacuee || evacuee.centerId == null || !centerIds.includes(evacuee.centerId))
             throw new TRPCError({ code: "FORBIDDEN", message: "You can only manage evacuees in your assigned center." });
         }
         const result = await releaseEvacuee(input.evacueeId);

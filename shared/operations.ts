@@ -96,3 +96,5 @@ export function getRiskReportHeadline(report: {
   }
   return report.reportType;
 }
+
+export function compareNames(a: { lastName: string; firstName: string; middleName?: string | null }, b: { lastName: string; firstName: string; middleName?: string | null }) { return (a.lastName || '').localeCompare(b.lastName || '') || (a.firstName || '').localeCompare(b.firstName || '') || (a.middleName || '').localeCompare(b.middleName || ''); }
