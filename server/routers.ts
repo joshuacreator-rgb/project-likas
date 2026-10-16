@@ -1488,10 +1488,16 @@ export const appRouter = router({
             const attachmentCount = await countStoredEvidenceForReport(report.id);
             const alert = await createAlert({
               title: `${report.priority} incident assignment`,
-              message: describeAssignmentNotification(report, {
-                assignedAt: now,
-                attachmentCount,
-              }),
+              message: describeAssignmentNotification(
+                // The report snapshot was read before the assignment wrote its
+                // IN_PROGRESS transition — the notification must state the
+                // status the responder will find, not the stale one.
+                { ...report, status: shouldStart ? "IN_PROGRESS" : report.status },
+                {
+                  assignedAt: now,
+                  attachmentCount,
+                }
+              ),
               alertType: "INCIDENT_ASSIGNMENT",
               priority: report.priority,
               targetAudience: "RESPONDERS",
