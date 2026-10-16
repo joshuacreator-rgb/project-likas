@@ -1,5 +1,6 @@
 // Live end-to-end check for the registry + responder-interface clusters
-// (commit e760ae2b) against https://likas.fyi.
+// (commit e760ae2b) and the G3/G9/G13/G14 small batch (commit f516a8b8)
+// against https://likas.fyi.
 //
 // Public self-registration only creates citizen accounts, so the responder and
 // admin accounts for this run are provisioned straight into the database over
@@ -7,6 +8,15 @@
 // citizen account goes through the real registration path, which exercises the
 // atomic account+registry transaction (spec 5.6). All test data is deleted at
 // the end.
+//
+// The small-batch checks on top of the cluster flow:
+//   - 3.2: report A is created WITHOUT a reportCode and gets a server-generated
+//     RPT- code; report B still honors a caller-supplied code.
+//   - 4.6: incidentTimeline carries assignedResponderName and the audit trail
+//     (CREATE, RESPONDER_ASSIGNED, INCIDENT_STATUS_CHANGED with actor names).
+//   - 5.29: the demo-accounts list is alphabetized (Alpha probe before Zulu).
+//   - 1.8: a headless two-tab browser run — a dashboard tab is kicked to
+//     /login the moment a second tab signs in.
 //
 //   railway connect mysql --tunnel-only -P 3307   (background)
 //   MYSQL_USER=... MYSQL_PASSWORD=... MYSQL_DATABASE=... node verify-clusters-live.mjs
@@ -19,7 +29,6 @@ const PW = `ClusterCheck-${stamp}-a1`;
 const CITIZEN_EMAIL = `cluster.citizen.${stamp}@gmail.com`;
 const RESPONDER_EMAIL = `cluster.responder.${stamp}@gmail.com`;
 const ADMIN_EMAIL = `cluster.admin.${stamp}@gmail.com`;
-const CODE_A = `CLUSTER-A-${stamp}`.toUpperCase();
 const CODE_B = `CLUSTER-B-${stamp}`.toUpperCase();
 
 const checks = [];
@@ -113,17 +122,18 @@ async function main() {
     return finish(db, null, null);
   }
 
-  console.log("\n2. Reports (create as citizen)");
+  console.log("\n2. Reports (create as citizen — A WITHOUT a code, B with one)");
   const mkReport = code => trpc("operations.createRiskReport", {
     method: "POST", cookie: citizen.cookie,
     input: {
-      reportCode: code, reportType: "Citizen emergency",
+      reportType: "Citizen emergency",
       description: "Automated cluster verification report — safe to delete.",
       location: "Pateros test coordinates, Metro Manila",
       latitude: 14.5447, longitude: 121.0714, priority: "HIGH",
+      ...(code ? { reportCode: code } : {}),
     },
   });
-  const reportA = await mkReport(CODE_A);
+  const reportA = await mkReport(null);
   const reportB = await mkReport(CODE_B);
   record(!reportA.error, "create report A", reportA.error ?? `id=${reportA.value?.id}`);
   record(!reportB.error, "create report B", reportB.error ?? `id=${reportB.value?.id}`);
@@ -146,6 +156,12 @@ async function main() {
   const summary = await trpc("operations.summary", { cookie: admin.cookie });
   record(typeof summary.value?.households === "number", "summary.households is a real count",
     `households=${summary.value?.households} evacuees=${summary.value?.evacuees}`);
+
+  const reportsPre = await trpc("operations.reports", { cookie: admin.cookie });
+  const preA = (reportsPre.value ?? []).find(r => r.id === idA);
+  const preB = (reportsPre.value ?? []).find(r => r.id === idB);
+  record(/^RPT-[0-9A-Z]+-[0-9A-F]{8}$/.test(preA?.reportCode ?? ""), "report A got a server-generated RPT code (3.2)", preA?.reportCode ?? "missing");
+  record(preB?.reportCode === CODE_B, "report B honors a caller-supplied code (back-compat)", preB?.reportCode ?? "missing");
 
   console.log("\n4. Assignment → enriched notification (spec 4.1/4.2)");
   const assign = await trpc("operations.assignResponder", {
@@ -173,6 +189,10 @@ async function main() {
   record(!timeline.error, "incidentTimeline answers for the assigned responder");
   record(timeline.value?.report?.latitude != null && timeline.value?.report?.longitude != null,
     "report carries coordinates for the map", `lat=${timeline.value?.report?.latitude}`);
+  record(/Ramon/.test(timeline.value?.assignedResponderName ?? ""), "timeline carries the assigned responder name (4.6)", timeline.value?.assignedResponderName ?? "null");
+  const audit1 = timeline.value?.auditTrail ?? [];
+  record(audit1.some(e => e.action === "CREATE" && /Clara/.test(e.actorName ?? "")), "audit trail includes CREATE with the reporter as actor", JSON.stringify(audit1.map(e => `${e.actorName}:${e.action}`)));
+  record(audit1.some(e => e.action === "RESPONDER_ASSIGNED" && /Ana/.test(e.actorName ?? "")), "audit trail includes RESPONDER_ASSIGNED (4.6)");
 
   console.log("\n6. Resolve with optional remarks (spec 4.3)");
   const resolve = await trpc("operations.updateRiskReport", {
@@ -186,6 +206,10 @@ async function main() {
   record(/site cleared/.test(rowA2?.resolution ?? ""), "resolution remarks stored", JSON.stringify(rowA2?.resolution ?? null));
   const rAlerts2 = await trpc("operations.alerts", { cookie: responder.cookie });
   record(!(rAlerts2.value ?? []).some(a => a.reportId === idA), "linked alert ended after resolve");
+  const timeline2 = await trpc("operations.incidentTimeline", { cookie: responder.cookie, input: { reportId: idA } });
+  const audit2 = timeline2.value?.auditTrail ?? [];
+  record(audit2.some(e => e.action === "INCIDENT_STATUS_CHANGED" && /Ramon/.test(e.actorName ?? "")),
+    "audit trail gains INCIDENT_STATUS_CHANGED after resolve (4.6)", JSON.stringify(audit2.map(e => `${e.actorName}:${e.action}`)));
 
   console.log("\n7. Reject with optional note (spec 4.4)");
   await trpc("operations.updateRiskReport", { method: "POST", cookie: admin.cookie, input: { reportId: idB, status: "VERIFIED" } });
@@ -199,10 +223,94 @@ async function main() {
   record(rowB?.status === "REJECTED", "report B REJECTED", `status=${rowB?.status}`);
   record(/duplicate/.test(rowB?.resolution ?? ""), "rejection note stored");
 
-  await finish(db, { idA, idB, me, apiOrder }, { responderDbId, adminDbId });
+  console.log("\n7b. Demo-accounts list is alphabetized (spec 5.29)");
+  const probeZ = await trpc("admin.provisionDemoAccount", { method: "POST", cookie: admin.cookie, input: { name: `Zulu Probe ${stamp}`, role: "citizen", expiresInDays: 1 } });
+  const probeA = await trpc("admin.provisionDemoAccount", { method: "POST", cookie: admin.cookie, input: { name: `Alpha Probe ${stamp}`, role: "citizen", expiresInDays: 1 } });
+  record(!probeZ.error && !probeA.error, "probe demo accounts provisioned", probeZ.error ?? probeA.error ?? "");
+  const demos = await trpc("admin.demoAccounts", { cookie: admin.cookie });
+  const demoList = demos.value ?? [];
+  const idxZ = demoList.findIndex(d => d.email === probeZ.value?.email);
+  const idxA = demoList.findIndex(d => d.email === probeA.value?.email);
+  record(idxA >= 0 && idxZ >= 0 && idxA < idxZ, "demo-accounts list sorted (Alpha probe before Zulu probe)", `alpha@${idxA} zulu@${idxZ} n=${demoList.length}`);
+
+  console.log("\n7c. Cross-tab session kick (spec 1.8) — headless two-tab browser");
+  await browserKickCheck();
+
+  const probeEmails = [probeZ.value?.email, probeA.value?.email].filter(Boolean);
+  await finish(db, { idA, idB, me, apiOrder }, { responderDbId, adminDbId }, probeEmails);
 }
 
-async function finish(db, flow, provisioned) {
+/**
+ * Spec 1.8: tab 1 signs in as admin and sits on the dashboard; tab 2 (same
+ * browser profile) signs in as responder. The likas-login broadcast must kick
+ * tab 1 back to /login immediately — and must not kick tab 2 itself.
+ */
+async function browserKickCheck() {
+  let puppeteer;
+  try { puppeteer = (await import("puppeteer-core")).default; }
+  catch { console.log("    SKIP: puppeteer-core not installed — browser kick check not run"); return; }
+  const { existsSync, mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const chrome = [
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    process.env.CHROME_PATH,
+  ].find(p => p && existsSync(p));
+  if (!chrome) { console.log("    SKIP: no Chrome/Edge binary found"); return; }
+  const profile = mkdtempSync(join(tmpdir(), "likas-kick-"));
+  let browser;
+  try {
+    browser = await puppeteer.launch({ executablePath: chrome, headless: true, userDataDir: profile, args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"], protocolTimeout: 120000 });
+    const page1 = await browser.newPage();
+    const page2 = await browser.newPage();
+    // Poll the URL from Node rather than waitForFunction: the dashboard page
+    // keeps its main thread busy with SSE + refetches, and in-page evaluation
+    // polling has proven flaky there (protocol timeouts).
+    const waitUrl = async (page, predicate, timeoutMs) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (predicate(new URL(page.url()).pathname)) return true;
+        await new Promise(r => setTimeout(r, 500));
+      }
+      return predicate(new URL(page.url()).pathname);
+    };
+    const login = async (page, email) => {
+      await page.goto(`${BASE}/login`, { waitUntil: "networkidle2", timeout: 60000 });
+      await page.waitForSelector("#login-email", { timeout: 30000 });
+      // Let React finish wiring the form before typing/clicking — clicking a
+      // not-yet-hydrated submit button does a native form POST back to /login.
+      await new Promise(r => setTimeout(r, 2000));
+      await page.type("#login-email", email);
+      await page.type("#login-password", PW);
+      // In-page click: puppeteer's own click() hangs on this two-page setup
+      // (its post-dispatch CDP evaluation never returns — reproducibly), while
+      // a DOM click dispatched inside the page behaves normally.
+      await page.evaluate(() => document.querySelector("button[type='submit']")?.click());
+      const left = await waitUrl(page, p => !p.startsWith("/login"), 45000);
+      if (!left) {
+        const banner = await page.$eval(".login-error", n => n.innerText).catch(() => null);
+        throw new Error(`login did not leave /login (url=${page.url()}, banner=${JSON.stringify(banner)})`);
+      }
+    };
+    await login(page1, ADMIN_EMAIL);
+    record(true, "admin signed in on tab 1", page1.url().replace(BASE, ""));
+    await login(page2, RESPONDER_EMAIL);
+    record(true, "responder signed in on tab 2", page2.url().replace(BASE, ""));
+    const kicked = await waitUrl(page1, p => p.startsWith("/login"), 10000);
+    record(kicked, "tab 1 kicked to /login after tab 2 signed in (1.8)", `url=${page1.url().replace(BASE, "")}`);
+    record(!new URL(page2.url()).pathname.startsWith("/login"), "tab 2 (the new session) was not kicked by its own login", page2.url().replace(BASE, ""));
+  } catch (e) {
+    // A browser problem must not abort the run before finish() cleans up.
+    record(false, "cross-tab kick browser check failed", String(e).slice(0, 220));
+  } finally {
+    if (browser) await browser.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+}
+
+async function finish(db, flow, provisioned, extraEmails = []) {
   console.log("\n8. DB verification + cleanup (tunnel 127.0.0.1:3307)");
   try {
     const [cols] = await db.query("SHOW COLUMNS FROM evacuees LIKE ?", ["userId"]);
@@ -231,7 +339,7 @@ async function finish(db, flow, provisioned) {
       record(sorted, "listResponders is ordered LN→FN→MN (5.29)", `n=${ids.length}`);
     }
 
-    const emails = [CITIZEN_EMAIL, RESPONDER_EMAIL, ADMIN_EMAIL];
+    const emails = [CITIZEN_EMAIL, RESPONDER_EMAIL, ADMIN_EMAIL, ...extraEmails];
     const userIds = [flow ? null : null, provisioned?.responderDbId, provisioned?.adminDbId].filter(Boolean);
     const [citizenRows] = await db.query("SELECT id FROM users WHERE email = ?", [CITIZEN_EMAIL]);
     for (const id of citizenRows.map(r => r.id)) userIds.push(id);
@@ -248,10 +356,21 @@ async function finish(db, flow, provisioned) {
         catch (e) { console.log(`    cleanup skipped: ${sql.slice(0, 55)}… (${e.message.slice(0, 55)})`); }
       }
     }
+    // Activity logs referencing the test users (as actor or as the entity they
+    // provisioned, e.g. DEMO_PROVISIONED) must go before users, or the FK on
+    // actorId blocks the users delete.
+    const inUsersLog = userIds.length ? userIds.map(() => "?").join(",") : "NULL";
+    try {
+      const [res] = await db.query(
+        `DELETE FROM activity_logs WHERE actorId IN (${inUsersLog}) OR (entityType='user' AND entityId IN (${inUsersLog}))`,
+        [...userIds, ...userIds]
+      );
+      console.log(`    cleanup ok: activity_logs by test actors/entities (${res.affectedRows} rows)`);
+    } catch (e) { console.log(`    cleanup skipped: activity_logs by actor… (${e.message.slice(0, 55)})`); }
     const accountCleanup = [
-      ["DELETE FROM auth_credentials WHERE email IN (?,?,?)", emails],
+      [`DELETE FROM auth_credentials WHERE email IN (${emails.map(() => "?").join(",")})`, emails],
       [`DELETE FROM evacuees WHERE userId IN (${userIds.map(() => "?").join(",") || "NULL"})`, userIds],
-      ["DELETE FROM users WHERE email IN (?,?,?)", emails],
+      [`DELETE FROM users WHERE email IN (${emails.map(() => "?").join(",")})`, emails],
     ];
     for (const [sql, params] of accountCleanup) {
       try { const [res] = await db.query(sql, params); console.log(`    cleanup ok: ${sql.slice(0, 55)}… (${res.affectedRows} rows)`); }
