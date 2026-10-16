@@ -396,3 +396,7 @@ button { cursor:pointer; }
   .family-modal { width: calc(100vw - 24px) !important; max-height: calc(100vh - 24px) !important; }
   .workspace-table { font-size: 12.5px; }
 }
+
+/* mobile overlap fixes */
+@media (max-width: 760px) { body .modal-backdrop { z-index: 1200; } .responder-map,.responder-map .leaflet-container { isolation: isolate; } }
+@media (max-width: 760px) { .workspace-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; } .workspace-table { min-width: 540px; } }
