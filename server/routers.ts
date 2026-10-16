@@ -253,7 +253,19 @@ async function issueLocalSession(
   user: NonNullable<Awaited<ReturnType<typeof verifyLocalCredentials>>>
 ) {
   const sessionId = crypto.randomUUID();
-  try { await setActiveSessionToken(user.id, sessionId); } catch { /* best effort */ }
+  // Not best effort: session validation requires this row to hold the sid this
+  // cookie is about to carry. Swallowing the failure here used to mint cookies
+  // that could never authenticate, and pairing with a lenient validator let
+  // stale cookies outlive logout. Fail the sign-in instead of issuing a dead cookie.
+  try {
+    await setActiveSessionToken(user.id, sessionId);
+  } catch (error) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Your session could not be started. Please try signing in again.",
+      cause: error,
+    });
+  }
   const token = await new SignJWT({ role: user.role, email: user.email, sid: sessionId })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(String(user.id))
@@ -648,7 +660,16 @@ export const appRouter = router({
     }),
     logout: publicProcedure.mutation(async ({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
-      if (ctx.user) { try { await setActiveSessionToken(ctx.user.id, null); } catch { } }
+      if (ctx.user) {
+        try {
+          await setActiveSessionToken(ctx.user.id, null);
+        } catch (error) {
+          // Best effort: clearing the browser cookie still succeeds. But a
+          // failed write leaves the session valid until it is superseded or it
+          // expires, so make the failure visible instead of dropping it.
+          console.error("[auth.logout] failed to clear active session token:", error);
+        }
+      }
       ctx.res.clearCookie(COOKIE_NAME, cookieOptions);
       ctx.res.clearCookie("likas_session", cookieOptions);
       return { success: true } as const;

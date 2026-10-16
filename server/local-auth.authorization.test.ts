@@ -2,7 +2,9 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
-  return { ...actual, verifyLocalCredentials: vi.fn() };
+  // Session issuance now writes the sid first and fails the sign-in if it
+  // cannot, so the write is stubbed: there is no database under vitest.
+  return { ...actual, verifyLocalCredentials: vi.fn(), setActiveSessionToken: vi.fn().mockResolvedValue({ userId: 0, activeSessionToken: null }) };
 });
 
 beforeAll(() => {

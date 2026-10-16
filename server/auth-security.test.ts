@@ -9,6 +9,7 @@ const mockedDb = vi.hoisted(() => ({
   verifyLocalEmail: vi.fn(),
   getUserById: vi.fn(),
   verifyUserTotp: vi.fn(),
+  setActiveSessionToken: vi.fn().mockResolvedValue({ userId: 0, activeSessionToken: null }),
   provisionDemoAccount: vi.fn(),
   provisionDemoAccounts: vi.fn(),
   listDemoAccounts: vi.fn(),
