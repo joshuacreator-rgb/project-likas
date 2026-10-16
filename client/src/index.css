@@ -360,6 +360,7 @@ button { cursor:pointer; }
 
 /* Assignment dropdown — availability flagging (spec 3.7) */
 .assignment-hint{font-weight:500;color:#5b7d75;font-size:12px}
+.assignment-closed-note{margin:0;padding:11px 13px;border:1px solid #e3cd97;border-radius:9px;background:#fdf6e6;color:#7a5a17;font-size:13px;font-weight:600;line-height:1.5}
 
 /* Client §27 — family management in the staff Evacuees section */
 .registry-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}

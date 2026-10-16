@@ -37,6 +37,9 @@
 //     ID verification entry; the Incident Map page never clips its queue; and
 //     the incident timeline modal has no Notify responder button while its
 //     mini map resizes on open and zooms onto the incident location.
+//   - client §30: closed incidents (RESOLVED/REJECTED) refuse responder
+//     assignment at the API with the exact client sentence, and the incident
+//     modal keeps the assign controls visibly disabled with the same notice.
 //
 //   railway connect mysql --tunnel-only -P 3307   (background)
 //   MYSQL_USER=... MYSQL_PASSWORD=... MYSQL_DATABASE=... node verify-clusters-live.mjs
@@ -296,6 +299,31 @@ async function main() {
     record(/Reported /.test(staffReject.message), "rejection message carries the reported time");
     record(/duplicate/.test(staffReject.message), "rejection message carries the note");
   }
+
+  console.log("\n7a. Closed incidents refuse responder assignment (client §30)");
+  const resolvedMsg = "This incident has been resolved. Responder assignment is no longer available.";
+  const rejectedMsg = "This incident has been rejected. Responder assignment is no longer available.";
+  const closedAssignA = await trpc("operations.assignResponder", {
+    method: "POST", cookie: admin.cookie,
+    input: { reportId: idA, responderId: me.id },
+  });
+  record(closedAssignA.error === resolvedMsg,
+    "assignResponder refuses a RESOLVED incident with the client sentence (§30)",
+    closedAssignA.error ?? "accepted!");
+  const closedAssignB = await trpc("operations.assignResponder", {
+    method: "POST", cookie: staff.cookie,
+    input: { reportId: idB, responderId: me.id },
+  });
+  record(closedAssignB.error === rejectedMsg,
+    "assignResponder refuses a REJECTED incident with the client sentence (§30)",
+    closedAssignB.error ?? "accepted!");
+  const closedClaimA = await trpc("operations.claimIncident", {
+    method: "POST", cookie: responder.cookie,
+    input: { reportId: idA },
+  });
+  record(closedClaimA.error === resolvedMsg,
+    "claimIncident refuses a RESOLVED incident with the client sentence (§30)",
+    closedClaimA.error ?? "accepted!");
 
   console.log("\n7b. Demo-accounts list is alphabetized (spec 5.29)");
   const probeZ = await trpc("admin.provisionDemoAccount", { method: "POST", cookie: admin.cookie, input: { name: `Zulu Probe ${stamp}`, role: "citizen", expiresInDays: 1 } });
@@ -561,6 +589,11 @@ async function browserKickCheck() {
       await incidentMapCheck(browser, login);
     } catch (e) {
       record(false, "incident map browser check failed", String(e).slice(0, 220));
+    }
+    try {
+      await resolvedAssignCheck(browser, login);
+    } catch (e) {
+      record(false, "resolved-assignment browser check failed", String(e).slice(0, 220));
     }
     // Last: role nav checks take over the shared session, so they run after
     // every admin check that needs it.
@@ -1093,6 +1126,78 @@ async function roleNavCheck(browser, login, email, roleLabel, expectations) {
         `${roleLabel} nav ${shouldExist ? "still offers" : "no longer offers"} ${label} (client §29)`,
         JSON.stringify(labels));
     }
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * Client §30: a RESOLVED incident keeps its assignment controls visible but
+ * visibly disabled — the select and the Assign/Remove button do nothing and
+ * the modal carries the exact "no longer available" notice. (The responder
+ * claim path is unreachable for closed incidents in the UI — resolved rows
+ * drop out of every responder list — so it is pinned by the API refusal
+ * checks in step 7a plus the shared message contract in the unit tests.)
+ */
+async function resolvedAssignCheck(browser, login) {
+  const page = await browser.newPage();
+  try {
+    await page.setViewport({ width: 1440, height: 900 });
+    await login(page, ADMIN_EMAIL);
+    await evalPoll(page,
+      () => [...document.querySelectorAll(".side-nav button")].some(b => /Risk reports/.test(b.textContent ?? "")),
+      s => s, 15000, 300);
+    await page.evaluate(() => {
+      const got = [...document.querySelectorAll("button")].find(b => /Got it/i.test(b.textContent ?? ""));
+      got?.click();
+      const nav = [...document.querySelectorAll(".side-nav button")].find(b => /Risk reports/.test(b.textContent ?? ""));
+      nav?.click();
+    });
+    // Open the timeline of the row whose status is RESOLVED (report A from
+    // step 6 — it is still on staging until finish() cleans up).
+    const opened = await (async () => {
+      const deadline = Date.now() + 20000;
+      while (Date.now() < deadline) {
+        const ok = await page.evaluate(() => {
+          const row = [...document.querySelectorAll(".responder-incident-item")].find(r =>
+            [...r.querySelectorAll("span")].some(sp => (sp.textContent ?? "").trim() === "RESOLVED"));
+          const btn = row
+            ? [...row.querySelectorAll("button")].find(b => /View incident timeline/.test(b.textContent ?? ""))
+            : null;
+          btn?.click();
+          return Boolean(btn);
+        }).catch(() => false);
+        if (ok) return true;
+        await new Promise(r => setTimeout(r, 500));
+      }
+      return false;
+    })();
+    record(Boolean(opened), "resolved incident opens from the Risk reports queue (§30)");
+    await page.waitForSelector(".incident-detail-modal", { timeout: 15000 });
+
+    const controls = await evalPoll(page,
+      () => {
+        const modal = document.querySelector(".incident-detail-modal");
+        const select = modal?.querySelector('select[aria-label="Assign responder"]');
+        if (!modal || !select) return null;
+        const assignButton = [...modal.querySelectorAll(".assignment-actions button")]
+          .find(b => /^(Assign responder|Remove assignment)/.test((b.textContent ?? "").trim()));
+        return {
+          selectDisabled: select.disabled,
+          buttonDisabled: assignButton ? assignButton.disabled : null,
+          buttonText: assignButton?.textContent?.trim() ?? null,
+        };
+      },
+      s => Boolean(s), 10000, 300);
+    record(controls?.selectDisabled === true && controls?.buttonDisabled === true,
+      "resolved incident keeps the Assign Responder controls visibly disabled (§30)",
+      JSON.stringify(controls));
+
+    const notices = await page.evaluate(() =>
+      [...document.querySelectorAll(".incident-detail-modal .assignment-closed-note")]
+        .map(n => (n.textContent ?? "").trim()));
+    record(notices.some(t => t === "This incident has been resolved. Responder assignment is no longer available."),
+      "resolved incident shows the assignment-closed message (§30)", JSON.stringify(notices));
   } finally {
     await page.close();
   }

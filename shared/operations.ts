@@ -28,6 +28,23 @@ export function canTransitionReport(current: ReportStatus, next: ReportStatus) {
   return current === next || transitions[current].includes(next);
 }
 
+/**
+ * Client §30: once a report is closed (RESOLVED or REJECTED) responder
+ * assignment is over. The incident modal disables its assignment controls with
+ * this exact sentence and the server refuses the mutation with the same
+ * wording, so the UI and the API speak with one voice.
+ */
+export const CLOSED_ASSIGNMENT_MESSAGES: Record<"RESOLVED" | "REJECTED", string> = {
+  RESOLVED: "This incident has been resolved. Responder assignment is no longer available.",
+  REJECTED: "This incident has been rejected. Responder assignment is no longer available.",
+};
+
+export function closedAssignmentMessage(status: string): string | null {
+  return status === "RESOLVED" || status === "REJECTED"
+    ? CLOSED_ASSIGNMENT_MESSAGES[status]
+    : null;
+}
+
 export type AlertTargetAudience =
   | "ALL_USERS"
   | "CITIZENS"

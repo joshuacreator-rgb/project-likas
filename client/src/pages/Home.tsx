@@ -61,7 +61,7 @@ import {
   getLoginPath,
   getRegisterPath,
 } from "../../../shared/roles";
-import { alertsVisibleToRole, compareNames, evacueeMatchesSearch, getAlertHeadline, getRiskReportHeadline, type ReportStatus } from "../../../shared/operations";
+import { alertsVisibleToRole, closedAssignmentMessage, compareNames, evacueeMatchesSearch, getAlertHeadline, getRiskReportHeadline, type ReportStatus } from "../../../shared/operations";
 import {
   adviceCategories,
   adviceCategoryOrder,
@@ -982,6 +982,13 @@ export default function Home() {
   const incidentStatus = (incidentTimeline?.report?.status ??
     selectedIncident?.status ??
     "PENDING") as ReportStatus;
+  // Client §30: a closed incident (resolved or rejected) keeps its assignment
+  // controls visible but visibly disabled, with this notice — and the server
+  // refuses the same mutations with the same sentence. The status comes from
+  // the live incidentTimeline query, so the controls lock the moment a
+  // resolution lands and stay locked after a refresh.
+  const isIncidentClosed = incidentStatus === "RESOLVED" || incidentStatus === "REJECTED";
+  const closedAssignmentNotice = closedAssignmentMessage(incidentStatus);
   const canActOnIncident =
     isAdmin ||
     (isResponder &&
@@ -2008,6 +2015,7 @@ export default function Home() {
                       aria-label="Assign responder"
                       value={assignTarget}
                       onChange={e => setAssignTarget(Number(e.target.value))}
+                      disabled={isIncidentClosed}
                     >
                       <option value={0}>Unassigned</option>
                       {sortedResponders.map(responder => {
@@ -2026,7 +2034,11 @@ export default function Home() {
                         );
                       })}
                     </select>
-                    {busyResponderCount > 0 && (
+                    {isIncidentClosed ? (
+                      <p className="assignment-closed-note" role="status">
+                        {closedAssignmentNotice}
+                      </p>
+                    ) : busyResponderCount > 0 && (
                       <small className="assignment-hint">
                         {busyResponderCount} responder
                         {busyResponderCount === 1 ? " is" : "s are"} busy on open
@@ -2039,14 +2051,16 @@ export default function Home() {
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={() =>
-                        selectedIncidentReportId !== null &&
+                      onClick={() => {
+                        // Client §30: never even fire the mutation on a closed
+                        // incident — the server would refuse it anyway.
+                        if (isIncidentClosed || selectedIncidentReportId === null) return;
                         assignResponderMutation.mutate({
                           reportId: selectedIncidentReportId,
                           responderId: assignTarget || null,
-                        })
-                      }
-                      disabled={assignResponderMutation.isPending}
+                        });
+                      }}
+                      disabled={isIncidentClosed || assignResponderMutation.isPending}
                     >
                       {assignResponderMutation.isPending
                         ? "Saving…"
@@ -2080,14 +2094,21 @@ export default function Home() {
                   <div className="assignment-actions">
                     <Button
                       type="button"
-                      onClick={() =>
-                        selectedIncidentReportId !== null &&
-                        claimIncidentMutation.mutate({ reportId: selectedIncidentReportId })
-                      }
-                      disabled={claimIncidentMutation.isPending}
+                      onClick={() => {
+                        // Client §30: claiming is an assignment too — closed
+                        // incidents refuse it before the request leaves.
+                        if (isIncidentClosed || selectedIncidentReportId === null) return;
+                        claimIncidentMutation.mutate({ reportId: selectedIncidentReportId });
+                      }}
+                      disabled={isIncidentClosed || claimIncidentMutation.isPending}
                     >
                       {claimIncidentMutation.isPending ? "Claiming…" : "Claim this incident"}
                     </Button>
+                    {isIncidentClosed && (
+                      <p className="assignment-closed-note" role="status">
+                        {closedAssignmentNotice}
+                      </p>
+                    )}
                     {claimIncidentMutation.isSuccess && (
                       <p className="incident-notified" role="status">
                         <CheckCircle2 size={16} /> Incident claimed — it is now assigned to you.

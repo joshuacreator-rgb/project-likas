@@ -12,7 +12,7 @@ import {
 } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { clearRateLimit, enforceRateLimit } from "./_core/rateLimit";
-import { getResourceStatus, canTransitionReport, describeAssignmentNotification, getRiskReportHeadline, type ReportStatus } from "../shared/operations";
+import { getResourceStatus, canTransitionReport, closedAssignmentMessage, describeAssignmentNotification, getRiskReportHeadline, type ReportStatus } from "../shared/operations";
 import { sendInvitationEmail, sendPasswordResetEmail } from "./_core/email";
 import {
   isRoleSelectionAllowed,
@@ -1512,8 +1512,11 @@ export const appRouter = router({
         const report = await getRiskReportById(input.reportId);
         if (!report)
           throw new TRPCError({ code: "NOT_FOUND", message: "Incident not found." });
-        if (report.status === "RESOLVED" || report.status === "REJECTED")
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Closed incidents cannot be reassigned." });
+        // Client §30: a closed incident refuses new assignments with the same
+        // sentence the disabled UI shows.
+        const closedMessage = closedAssignmentMessage(report.status);
+        if (closedMessage)
+          throw new TRPCError({ code: "BAD_REQUEST", message: closedMessage });
         if (
           input.responderId !== null &&
           report.assignedResponderId != null &&
@@ -1592,8 +1595,11 @@ export const appRouter = router({
         const report = await getRiskReportById(input.reportId);
         if (!report)
           throw new TRPCError({ code: "NOT_FOUND", message: "Incident not found." });
-        if (report.status === "RESOLVED" || report.status === "REJECTED")
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Closed incidents cannot be claimed." });
+        // Client §30: claiming is an assignment, so closed incidents refuse
+        // it with the same sentence the disabled UI shows.
+        const closedMessage = closedAssignmentMessage(report.status);
+        if (closedMessage)
+          throw new TRPCError({ code: "BAD_REQUEST", message: closedMessage });
         if (report.assignedResponderId && report.assignedResponderId !== ctx.user.id)
           throw new TRPCError({ code: "FORBIDDEN", message: "This incident is already assigned to another responder." });
         await updateRiskReport(input.reportId, { assignedResponderId: ctx.user.id });

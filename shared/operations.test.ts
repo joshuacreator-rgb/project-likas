@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  CLOSED_ASSIGNMENT_MESSAGES,
   calculateCenterMetrics,
   citizenReportTypeFromDanger,
+  closedAssignmentMessage,
   getAlertHeadline,
   getResourceStatus,
   getRiskReportHeadline,
@@ -71,5 +73,29 @@ describe("Project Likas operational rules", () => {
     expect(getResourceStatus(10, 10, null, now)).toBe("LOW_STOCK");
     expect(getResourceStatus(0, 10, null, now)).toBe("OUT_OF_STOCK");
     expect(getResourceStatus(20, 10, new Date("2026-08-22T00:00:00Z"), now)).toBe("EXPIRED");
+  });
+});
+
+describe("Client §30 closed-incident assignment refusal", () => {
+  it("names the resolved and rejected refusals with the exact client sentence", () => {
+    expect(closedAssignmentMessage("RESOLVED")).toBe(
+      "This incident has been resolved. Responder assignment is no longer available."
+    );
+    expect(closedAssignmentMessage("REJECTED")).toBe(
+      "This incident has been rejected. Responder assignment is no longer available."
+    );
+    // The map the server throws from is the same single source of truth.
+    expect(CLOSED_ASSIGNMENT_MESSAGES.RESOLVED).toBe(
+      closedAssignmentMessage("RESOLVED")
+    );
+    expect(CLOSED_ASSIGNMENT_MESSAGES.REJECTED).toBe(
+      closedAssignmentMessage("REJECTED")
+    );
+  });
+
+  it("keeps every open status assignable", () => {
+    for (const status of ["PENDING", "VERIFIED", "IN_PROGRESS"]) {
+      expect(closedAssignmentMessage(status)).toBeNull();
+    }
   });
 });
