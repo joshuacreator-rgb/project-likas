@@ -4,7 +4,7 @@
 
 **Overall: 71 requirements — 61 DONE (86%), 10 PARTIAL (14%), 0 NOT DONE.**
 
-> **Update (2026-10-16, clusters A+B):** the evacuee-registry cluster (G2/G6/G7/G11) and the responder-interface cluster (G1/G10/G8) are implemented. All four former NOT-DONE verdicts are closed; 11 PARTIAL verdicts moved to DONE. Deployment verification pending at time of writing.
+> **Update (2026-10-16, clusters A+B):** the evacuee-registry cluster (G2/G6/G7/G11) and the responder-interface cluster (G1/G10/G8) are implemented **and verified live on staging** (deploy `ade6e4f6`, https://likas.fyi): smoke 10/10, browser 9/9, and the full API e2e (`verify-clusters-live.mjs`) 34/34 — covering the migration columns, atomic registration with the linked `"Head"` row, the enriched assignment notification (status/assigned-time/attachments/maps pin, `reportId` carried), alert → incident open, resolve with optional remarks (alert ends), reject with note, `userEmail` join, real household count and LN→FN→MN responder order. All four former NOT-DONE verdicts are closed; 11 PARTIAL verdicts moved to DONE.
 
 | Section | Requirements | DONE | PARTIAL | NOT DONE |
 |---|---|---|---|---|
@@ -141,4 +141,4 @@ Ordered by weight. "Spec" points at the requirements above.
 | **G13** | Incident ID generation server-side (currently client-generated, uniqueness via DB index) | 3.2 | Trivial | Open |
 | **G14** | ~~Apply LN→FN→MN sorting to the responder dropdown and~~ demo-accounts list | 5.29 | Trivial | **Narrowed** — responder dropdown now sorted in `listResponders` (`server/db.ts:43`); demo-accounts list remains |
 
-**Standing note (updated).** All four former NOT-DONE verdicts (4.2, 5.3, 5.6, 5.17) are now DONE and closed by the cluster work above; nothing in the six-section spec is NOT DONE anymore. Remaining PARTIALs are concentrated in §1 (2), §3 (3), §4 (4.6 PDF), §5 (5.29 demo-accounts sort), §6 (1) plus §2's 2.2/2.7. `server/`, `shared/`, and tests are green (`tsc`, 353/353 vitest, `npm run build`); the registry/responder changes still need staging deployment + `smoke-staging` / `browser-check` verification, which also flips the deployment-status note in this document's header.
+**Standing note (updated).** All four former NOT-DONE verdicts (4.2, 5.3, 5.6, 5.17) are now DONE and closed by the cluster work above; nothing in the six-section spec is NOT DONE anymore. Remaining PARTIALs are concentrated in §1 (2), §3 (3), §4 (4.6 PDF), §5 (5.29 demo-accounts sort), §6 (1) plus §2's 2.2/2.7. Gates are green (`tsc`, 353/353 vitest, build, smoke 10/10, browser 9/9, live e2e 34/34 on deploy `ade6e4f6`).
