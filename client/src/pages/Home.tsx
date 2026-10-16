@@ -128,6 +128,9 @@ const incidents = [
     priority: "CRITICAL",
     time: "12 min ago",
     color: "rose",
+    status: "IN_PROGRESS",
+    createdAt: new Date(Date.now() - 12 * 60_000),
+    assignedResponderId: null,
   },
   {
     id: "RPT-2407",
@@ -136,6 +139,9 @@ const incidents = [
     priority: "HIGH",
     time: "38 min ago",
     color: "amber",
+    status: "VERIFIED",
+    createdAt: new Date(Date.now() - 38 * 60_000),
+    assignedResponderId: null,
   },
   {
     id: "RPT-2406",
@@ -144,6 +150,9 @@ const incidents = [
     priority: "MEDIUM",
     time: "1 hr ago",
     color: "blue",
+    status: "PENDING",
+    createdAt: new Date(Date.now() - 60 * 60_000),
+    assignedResponderId: null,
   },
 ];
 
@@ -438,6 +447,11 @@ export default function Home() {
   const [reportDescription, setReportDescription] = useState("");
   const [search, setSearch] = useState("");
   const [incidentFilter, setIncidentFilter] = useState("All");
+  // Spec 3.4: the queue is sortable by urgency/date/time/status, and the
+  // default "queue" order pins unreviewed (PENDING) reports to the top.
+  const [incidentSort, setIncidentSort] = useState<
+    "queue" | "newest" | "oldest" | "urgency" | "status"
+  >("queue");
   const [mapFilter, setMapFilter] = useState("All");
   const [submitted, setSubmitted] = useState(false);
   const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
@@ -710,14 +724,35 @@ export default function Home() {
             createdAt: report.createdAt,
             assignedResponderId: report.assignedResponderId ?? null,
           }));
-    return source.filter(
+    const priorityRank: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+    const statusRank: Record<string, number> = { PENDING: 0, VERIFIED: 1, IN_PROGRESS: 2, REJECTED: 3, RESOLVED: 4 };
+    const createdMs = (item: { createdAt?: Date | string | null }) =>
+      item.createdAt ? new Date(item.createdAt).getTime() : 0;
+    const filtered = source.filter(
       item =>
         (incidentFilter === "All" || item.priority === incidentFilter) &&
         `${item.id} ${item.type} ${item.location} ${item.priority}`
           .toLowerCase()
           .includes(search.trim().toLowerCase())
     );
-  }, [staticSession, liveReports, incidentFilter, search]);
+    const sorted = [...filtered].sort((a, b) => {
+      if (incidentSort === "urgency")
+        return (priorityRank[a.priority] ?? 9) - (priorityRank[b.priority] ?? 9) ||
+          createdMs(b) - createdMs(a);
+      if (incidentSort === "status")
+        return (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9) ||
+          createdMs(b) - createdMs(a);
+      if (incidentSort === "oldest") return createdMs(a) - createdMs(b);
+      // "newest" and the default "queue" order both keep recency; "queue"
+      // additionally pins unreviewed (PENDING) reports above everything else.
+      if (incidentSort === "queue") {
+        const unreviewed = Number(a.status === "PENDING") - Number(b.status === "PENDING");
+        if (unreviewed !== 0) return unreviewed;
+      }
+      return createdMs(b) - createdMs(a);
+    });
+    return sorted;
+  }, [staticSession, liveReports, incidentFilter, incidentSort, search]);
   const visibleCenters = useMemo(
     () =>
       displayCenters.filter(
@@ -921,6 +956,19 @@ export default function Home() {
       user?.id ===
         (incidentTimeline?.report?.assignedResponderId ??
           selectedIncident?.assignedResponderId));
+  // Spec 3.7: dispatchers pick an AVAILABLE responder — busy ones carry their
+  // open load in the label. The incident being viewed counts as "assigned
+  // here" for its own assignee, not as extra busyness.
+  const responderBusyCount = (responder: { id: number; openIncidentCount?: number }) =>
+    Math.max(
+      0,
+      (responder.openIncidentCount ?? 0) -
+        (selectedIncident?.assignedResponderId === responder.id ? 1 : 0)
+    );
+  const sortedResponders = [...(responders ?? [])].sort(
+    (a, b) => responderBusyCount(a) - responderBusyCount(b)
+  );
+  const busyResponderCount = sortedResponders.filter(r => responderBusyCount(r) > 0).length;
   return (
     <div className={`likas-app internal-shell ${dashboardRole}-shell ${largeText ? "large-text" : ""}`}>
       <RoleOnboarding role={user?.role} />
@@ -1289,22 +1337,38 @@ export default function Home() {
                   <h2>Incident queue</h2>
                   <p>Reports requiring operational attention</p>
                 </div>
-                <div className="filter-tabs">
-                  {["All", "CRITICAL", "HIGH"].map(filter => (
-                    <button
-                      key={filter}
-                      className={incidentFilter === filter ? "selected" : ""}
-                      onClick={() => setIncidentFilter(filter)}
-                    >
-                      {filter}
-                    </button>
-                  ))}
+                <div className="panel-head-actions">
+                  <select
+                    className="queue-sort"
+                    aria-label="Sort incident queue"
+                    value={incidentSort}
+                    onChange={e =>
+                      setIncidentSort(e.target.value as typeof incidentSort)
+                    }
+                  >
+                    <option value="queue">Unreviewed first</option>
+                    <option value="newest">Newest first</option>
+                    <option value="oldest">Oldest first</option>
+                    <option value="urgency">Urgency (high to low)</option>
+                    <option value="status">Status</option>
+                  </select>
+                  <div className="filter-tabs">
+                    {["All", "CRITICAL", "HIGH"].map(filter => (
+                      <button
+                        key={filter}
+                        className={incidentFilter === filter ? "selected" : ""}
+                        onClick={() => setIncidentFilter(filter)}
+                      >
+                        {filter}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
               <div className="incident-list">
                 {queueIncidents.map(incident => (
                   <button
-                    className="incident-row"
+                    className={`incident-row${incident.status === "PENDING" ? " unreviewed" : ""}`}
                     key={incident.id}
                     onClick={() => openIncident(incident)}
                   >
@@ -1324,6 +1388,11 @@ export default function Home() {
                     >
                       {incident.priority}
                     </StatusPill>
+                    {incident.status === "PENDING" && (
+                      <span className="incident-new-badge" title="Unreviewed — no responder has acted on it yet">
+                        NEW
+                      </span>
+                    )}
                     <ChevronRight size={16} className="row-arrow" />
                   </button>
                 ))}
@@ -1873,12 +1942,29 @@ export default function Home() {
                       onChange={e => setAssignTarget(Number(e.target.value))}
                     >
                       <option value={0}>Unassigned</option>
-                      {(responders ?? []).map(responder => (
-                        <option key={responder.id} value={responder.id}>
-                          {responder.name} · {responder.email}
-                        </option>
-                      ))}
+                      {sortedResponders.map(responder => {
+                        const busy = responderBusyCount(responder);
+                        const assignedHere =
+                          selectedIncident?.assignedResponderId === responder.id;
+                        return (
+                          <option key={responder.id} value={responder.id}>
+                            {responder.name} · {responder.email}
+                            {assignedHere
+                              ? " · assigned here"
+                              : busy > 0
+                                ? ` · busy (${busy} open)`
+                                : " · available"}
+                          </option>
+                        );
+                      })}
                     </select>
+                    {busyResponderCount > 0 && (
+                      <small className="assignment-hint">
+                        {busyResponderCount} responder
+                        {busyResponderCount === 1 ? " is" : "s are"} busy on open
+                        incidents — available responders are listed first.
+                      </small>
+                    )}
                   </label>
                   <div className="assignment-actions">
                     <Button
@@ -4001,7 +4087,15 @@ function WorkspaceView({
           </thead>
           <tbody>
             {workspaceRows.map((row, index) => (
-              <tr key={`${active}-${index}`}>
+              <tr
+                key={`${active}-${index}`}
+                className={
+                  active === "Risk reports" &&
+                  (filteredLiveReports ?? [])[index]?.status === "PENDING"
+                    ? "unreviewed-row"
+                    : undefined
+                }
+              >
                 {row.map((cell, cellIndex) => (
                   <td key={cell}>
                     {active === "Alerts" && cellIndex === 0 && alertMessages[index] ? (

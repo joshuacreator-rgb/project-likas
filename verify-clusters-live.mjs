@@ -15,8 +15,11 @@
 //   - 4.6: incidentTimeline carries assignedResponderName and the audit trail
 //     (CREATE, RESPONDER_ASSIGNED, INCIDENT_STATUS_CHANGED with actor names).
 //   - 5.29: the demo-accounts list is alphabetized (Alpha probe before Zulu).
-//   - 1.8: a headless two-tab browser run — a dashboard tab is kicked to
-//     /login the moment a second tab signs in.
+//   - 3.7: listResponders flags the assigned responder busy while the incident
+//     is open, and free again after it resolves.
+//   - 1.8 + 3.4: a headless two-tab browser run — a dashboard tab is kicked to
+//     /login the moment a second tab signs in, and the responder queue shows
+//     the sort control plus the NEW badge on the unreviewed report.
 //
 //   railway connect mysql --tunnel-only -P 3307   (background)
 //   MYSQL_USER=... MYSQL_PASSWORD=... MYSQL_DATABASE=... node verify-clusters-live.mjs
@@ -184,6 +187,11 @@ async function main() {
     record(/google\.com\/maps/i.test(alert.message), "alert carries a maps pin");
   }
 
+  const respondersBusy = await trpc("operations.listResponders", { cookie: admin.cookie });
+  const busyMe = (respondersBusy.value ?? []).find(r => r.id === me.id);
+  record(busyMe?.available === false && (busyMe?.openIncidentCount ?? 0) >= 1,
+    "assigned responder flagged busy with open load (3.7)", `open=${busyMe?.openIncidentCount} available=${busyMe?.available}`);
+
   console.log("\n5. Responder opens the incident (spec 4.2)");
   const timeline = await trpc("operations.incidentTimeline", { cookie: responder.cookie, input: { reportId: idA } });
   record(!timeline.error, "incidentTimeline answers for the assigned responder");
@@ -210,6 +218,9 @@ async function main() {
   const audit2 = timeline2.value?.auditTrail ?? [];
   record(audit2.some(e => e.action === "INCIDENT_STATUS_CHANGED" && /Ramon/.test(e.actorName ?? "")),
     "audit trail gains INCIDENT_STATUS_CHANGED after resolve (4.6)", JSON.stringify(audit2.map(e => `${e.actorName}:${e.action}`)));
+  const respondersFree = await trpc("operations.listResponders", { cookie: admin.cookie });
+  const freeMe = (respondersFree.value ?? []).find(r => r.id === me.id);
+  record(freeMe?.available === true, "responder free again after resolve (3.7)", `open=${freeMe?.openIncidentCount} available=${freeMe?.available}`);
 
   console.log("\n7. Reject with optional note (spec 4.4)");
   await trpc("operations.updateRiskReport", { method: "POST", cookie: admin.cookie, input: { reportId: idB, status: "VERIFIED" } });
@@ -233,11 +244,14 @@ async function main() {
   const idxA = demoList.findIndex(d => d.email === probeA.value?.email);
   record(idxA >= 0 && idxZ >= 0 && idxA < idxZ, "demo-accounts list sorted (Alpha probe before Zulu probe)", `alpha@${idxA} zulu@${idxZ} n=${demoList.length}`);
 
-  console.log("\n7c. Cross-tab session kick (spec 1.8) — headless two-tab browser");
+  console.log("\n7c. Queue UI + cross-tab kick (specs 3.4/1.8) — headless two-tab browser");
+  const reportC = await mkReport(null);
+  const idC = reportC.value?.id;
+  record(!reportC.error, "create an unreviewed report for the queue check", reportC.error ?? `id=${idC}`);
   await browserKickCheck();
 
   const probeEmails = [probeZ.value?.email, probeA.value?.email].filter(Boolean);
-  await finish(db, { idA, idB, me, apiOrder }, { responderDbId, adminDbId }, probeEmails);
+  await finish(db, { idA, idB, idC, me, apiOrder }, { responderDbId, adminDbId }, probeEmails);
 }
 
 /**
@@ -301,6 +315,28 @@ async function browserKickCheck() {
     const kicked = await waitUrl(page1, p => p.startsWith("/login"), 10000);
     record(kicked, "tab 1 kicked to /login after tab 2 signed in (1.8)", `url=${page1.url().replace(BASE, "")}`);
     record(!new URL(page2.url()).pathname.startsWith("/login"), "tab 2 (the new session) was not kicked by its own login", page2.url().replace(BASE, ""));
+
+    // Spec 3.4, on the responder dashboard that tab 2 is now showing: the
+    // queue must expose the sort control and highlight the unreviewed (PENDING)
+    // report that was created just before this browser run.
+    const pollQueue = async () => {
+      const deadline = Date.now() + 20000;
+      let last = null;
+      while (Date.now() < deadline) {
+        last = await page2.evaluate(() => ({
+          sort: Boolean(document.querySelector(".queue-sort")),
+          unreviewed: document.querySelectorAll(".incident-row.unreviewed").length,
+          badge: document.querySelector(".incident-new-badge")?.textContent?.trim() ?? null,
+        })).catch(() => null);
+        if (last?.sort && last.unreviewed >= 1) return last;
+        await new Promise(r => setTimeout(r, 700));
+      }
+      return last;
+    };
+    const queueInfo = await pollQueue();
+    record(Boolean(queueInfo?.sort), "responder queue exposes the sort control (3.4)");
+    record((queueInfo?.unreviewed ?? 0) >= 1 && queueInfo?.badge === "NEW",
+      "unreviewed incident highlighted with a NEW badge (3.4)", `rows=${queueInfo?.unreviewed} badge=${queueInfo?.badge}`);
   } catch (e) {
     // A browser problem must not abort the run before finish() cleans up.
     record(false, "cross-tab kick browser check failed", String(e).slice(0, 220));
@@ -344,12 +380,14 @@ async function finish(db, flow, provisioned, extraEmails = []) {
     const [citizenRows] = await db.query("SELECT id FROM users WHERE email = ?", [CITIZEN_EMAIL]);
     for (const id of citizenRows.map(r => r.id)) userIds.push(id);
     if (flow) {
+      const reportIds = [flow.idA, flow.idB, flow.idC].filter(Boolean);
+      const inReports = reportIds.length ? reportIds.map(() => "?").join(",") : "NULL";
       const cleanup = [
-        ["DELETE FROM alerts WHERE reportId IN (?,?)", [flow.idA, flow.idB]],
-        ["DELETE FROM responder_actions WHERE reportId IN (?,?)", [flow.idA, flow.idB]],
-        ["DELETE FROM activity_logs WHERE entityType='risk_report' AND entityId IN (?,?)", [flow.idA, flow.idB]],
-        ["DELETE FROM evidence_files WHERE reportId IN (?,?)", [flow.idA, flow.idB]],
-        ["DELETE FROM risk_reports WHERE id IN (?,?)", [flow.idA, flow.idB]],
+        [`DELETE FROM alerts WHERE reportId IN (${inReports})`, reportIds],
+        [`DELETE FROM responder_actions WHERE reportId IN (${inReports})`, reportIds],
+        [`DELETE FROM activity_logs WHERE entityType='risk_report' AND entityId IN (${inReports})`, reportIds],
+        [`DELETE FROM evidence_files WHERE reportId IN (${inReports})`, reportIds],
+        [`DELETE FROM risk_reports WHERE id IN (${inReports})`, reportIds],
       ];
       for (const [sql, params] of cleanup) {
         try { const [res] = await db.query(sql, params); console.log(`    cleanup ok: ${sql.slice(0, 55)}… (${res.affectedRows} rows)`); }
