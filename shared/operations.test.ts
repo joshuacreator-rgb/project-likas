@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   calculateCenterMetrics,
   citizenReportTypeFromDanger,
+  getAlertHeadline,
   getResourceStatus,
   getRiskReportHeadline,
 } from "./operations";
@@ -39,6 +40,29 @@ describe("Project Likas operational rules", () => {
         description: "Longer notes stay in description",
       })
     ).toBe("Flooding");
+  });
+
+  it("titles an alert with the actual emergency name (client §26)", () => {
+    // New alerts store the emergency name directly in the title.
+    expect(
+      getAlertHeadline({ title: "Fire in the kitchen", message: "anything" })
+    ).toBe("Fire in the kitchen");
+    // Legacy "… citizen emergency" titles derive the name from the message's
+    // description segment: "<something> reported at <location>: <description>."
+    expect(
+      getAlertHeadline({
+        title: "HIGH citizen emergency",
+        message: "Citizen emergency reported at Mabini St, Pateros: Fire in the kitchen, second floor.",
+      })
+    ).toBe("Fire in the kitchen, second floor.");
+    // A legacy title whose message has nothing to derive keeps itself.
+    expect(
+      getAlertHeadline({ title: "HIGH citizen emergency", message: "No location separator here" })
+    ).toBe("HIGH citizen emergency");
+    // Other alert types pass their title through untouched.
+    expect(
+      getAlertHeadline({ title: "Water interruption — Monday", message: "m" })
+    ).toBe("Water interruption — Monday");
   });
 
   it("classifies resource stock and expiry deterministically", () => {

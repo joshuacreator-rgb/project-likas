@@ -17,8 +17,14 @@ export function getResourceStatus(quantity: number, minimumStock: number, expira
 }
 
 export type ReportStatus = "PENDING" | "VERIFIED" | "IN_PROGRESS" | "RESOLVED" | "REJECTED";
+/**
+ * Spec 4.3/4.4 plus the client's two-button review flow (backlog §26): a
+ * rejected report needs the note explaining why, and from any open state the
+ * review actions work directly — Resolve lands on RESOLVED and Reject lands
+ * on REJECTED. Only the closed states refuse further actions.
+ */
 export function canTransitionReport(current: ReportStatus, next: ReportStatus) {
-  const transitions: Record<ReportStatus, ReportStatus[]> = { PENDING: ["VERIFIED", "REJECTED"], VERIFIED: ["IN_PROGRESS", "REJECTED"], IN_PROGRESS: ["RESOLVED"], RESOLVED: [], REJECTED: [] };
+  const transitions: Record<ReportStatus, ReportStatus[]> = { PENDING: ["VERIFIED", "RESOLVED", "REJECTED"], VERIFIED: ["IN_PROGRESS", "RESOLVED", "REJECTED"], IN_PROGRESS: ["RESOLVED", "REJECTED"], RESOLVED: [], REJECTED: [] };
   return current === next || transitions[current].includes(next);
 }
 
@@ -41,6 +47,44 @@ export type OperationalAlert = {
   reportId?: number | null;
 };
 
+/**
+ * Client §26: staff are authorized recipients of incident notifications —
+ * a new emergency, an assignment, or a rejection reaches staff alongside the
+ * audience the row was stamped with (admin + responder), never duplicating a
+ * row because delivery is a filter over the one alert.
+ */
+export const OPERATIONAL_ALERT_TYPES = ["CITIZEN_EMERGENCY", "INCIDENT_ASSIGNMENT", "INCIDENT_REJECTED"];
+
+export function isOperationalAlert(alertType: string): boolean {
+  return OPERATIONAL_ALERT_TYPES.includes(alertType);
+}
+
+/** Every role an alert is delivered to: its audience plus staff for incident operations. */
+export function alertDeliveryRoles(alert: { alertType: string; targetAudience: AlertTargetAudience }): string[] {
+  const roles = new Set<string>();
+  if (isOperationalAlert(alert.alertType)) {
+    roles.add("staff");
+  }
+  switch (alert.targetAudience) {
+    case "ALL_USERS":
+      ["admin", "staff", "responder", "citizen", "user"].forEach(role => roles.add(role));
+      break;
+    case "STAFF":
+      roles.add("staff");
+      break;
+    case "RESPONDERS":
+      roles.add("responder");
+      break;
+    case "ADMIN":
+      roles.add("admin");
+      break;
+    case "CITIZENS":
+      ["citizen", "user"].forEach(role => roles.add(role));
+      break;
+  }
+  return Array.from(roles);
+}
+
 /** Active alerts surfaced to a role: targeted audience plus public broadcasts. */
 export function alertsVisibleToRole<T extends OperationalAlert>(
   alerts: T[] | undefined,
@@ -57,7 +101,8 @@ export function alertsVisibleToRole<T extends OperationalAlert>(
     return list.filter(
       alert =>
         alert.targetAudience === "STAFF" ||
-        alert.targetAudience === "ALL_USERS"
+        alert.targetAudience === "ALL_USERS" ||
+        isOperationalAlert(alert.alertType)
     );
   return list; // admins see everything
 }
@@ -164,6 +209,19 @@ export function getRiskReportHeadline(report: {
     return fromDescription === "Emergency report" ? report.reportType : fromDescription;
   }
   return report.reportType;
+}
+
+/**
+ * Heading for an alert card, notification toast, or alert row (client §26):
+ * the actual emergency name first. Legacy alerts stored a role-word title like
+ * "HIGH citizen emergency"; for those rows the real name is the description
+ * segment of "… reported at <location>: <description>."
+ */
+export function getAlertHeadline(alert: { title: string; message: string }): string {
+  const title = alert.title.trim();
+  if (!/citizen emergency$/i.test(title)) return title;
+  const described = alert.message.split(/:\s+/).slice(1).join(": ").trim();
+  return described ? citizenReportTypeFromDanger(described) : title;
 }
 
 export function compareNames(a: { lastName: string; firstName: string; middleName?: string | null }, b: { lastName: string; firstName: string; middleName?: string | null }) { return (a.lastName || '').localeCompare(b.lastName || '') || (a.firstName || '').localeCompare(b.firstName || '') || (a.middleName || '').localeCompare(b.middleName || ''); }

@@ -61,7 +61,7 @@ import {
   getLoginPath,
   getRegisterPath,
 } from "../../../shared/roles";
-import { canTransitionReport, alertsVisibleToRole, compareNames, evacueeMatchesSearch, type ReportStatus } from "../../../shared/operations";
+import { alertsVisibleToRole, compareNames, evacueeMatchesSearch, getAlertHeadline, getRiskReportHeadline, type ReportStatus } from "../../../shared/operations";
 import {
   adviceCategories,
   adviceCategoryOrder,
@@ -560,15 +560,20 @@ export default function Home() {
       }
       if (payload.type === "connected") return;
       if (payload.type === "incident") {
-        toast(payload.data.reportType, {
-          description: `${payload.data.location} · ${payload.data.priority} priority`,
-          duration: 10000,
-        });
+        // Citizens get the awareness toast for a new emergency; internal roles
+        // are notified once by the alert toast below (client §26 — no duplicate
+        // notifications for the same event).
+        if (user.role === "citizen" || user.role === "user") {
+          toast(payload.data.reportType, {
+            description: `${payload.data.location} · ${payload.data.priority} priority`,
+            duration: 10000,
+          });
+        }
         utils.operations.reports.invalidate();
         utils.operations.summary.invalidate();
       } else if (payload.type === "alert") {
         if (payload.data.isActive) {
-          toast(payload.data.title, {
+          toast(getAlertHeadline(payload.data), {
             description: payload.data.message,
             duration: 12000,
           });
@@ -714,7 +719,7 @@ export default function Home() {
           .filter(report => report.status !== "RESOLVED")
           .map(report => ({
             id: report.reportCode,
-            type: report.reportType,
+            type: getRiskReportHeadline(report),
             location: report.location,
             priority: report.priority,
             time: report.createdAt ? relativeTime(report.createdAt) : "recently",
@@ -836,7 +841,7 @@ export default function Home() {
     openIncident(
       {
         id: report.reportCode,
-        type: report.reportType,
+        type: getRiskReportHeadline(report),
         location: report.location,
         priority: report.priority,
         time: report.createdAt ? relativeTime(report.createdAt) : "recently",
@@ -1684,7 +1689,7 @@ export default function Home() {
                             >
                               <Popup>
                                 <strong>
-                                  {report.reportCode} · {report.reportType}
+                                  {report.reportCode} · {getRiskReportHeadline(report)}
                                 </strong>
                                 <br />
                                 {report.location} · {report.priority} ·{" "}
@@ -1743,7 +1748,7 @@ export default function Home() {
                         <AlertTriangle size={17} />
                       </div>
                       <div>
-                        <strong>{alert.title}</strong>
+                        <strong>{getAlertHeadline(alert)}</strong>
                         <p>{alert.message}</p>
                         <small>{new Date(alert.createdAt).toLocaleString()}</small>
                         {canOpen && (
@@ -2073,41 +2078,45 @@ export default function Home() {
             </div>
             {canActOnIncident && (
               <div className="incident-side-buttons">
-                {canTransitionReport(incidentStatus, "RESOLVED") && (
-                  <Button
-                    type="button"
-                    onClick={() =>
-                      setResolutionDialog({
-                        mode: "RESOLVED",
-                        reportId:
-                          selectedIncident.reportId ?? selectedIncidentReportId ?? 0,
-                        reportLabel: selectedIncident.id,
-                        remarks: "",
-                      })
-                    }
-                    disabled={resolveReportMutation.isPending}
-                  >
-                    <CheckCircle2 size={15} /> Resolve incident
-                  </Button>
-                )}
-                {canTransitionReport(incidentStatus, "REJECTED") && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() =>
-                      setResolutionDialog({
-                        mode: "REJECTED",
-                        reportId:
-                          selectedIncident.reportId ?? selectedIncidentReportId ?? 0,
-                        reportLabel: selectedIncident.id,
-                        remarks: "",
-                      })
-                    }
-                    disabled={resolveReportMutation.isPending}
-                  >
-                    <XCircle size={15} /> Reject incident
-                  </Button>
-                )}
+                <Button
+                  type="button"
+                  onClick={() =>
+                    setResolutionDialog({
+                      mode: "RESOLVED",
+                      reportId:
+                        selectedIncident.reportId ?? selectedIncidentReportId ?? 0,
+                      reportLabel: selectedIncident.id,
+                      remarks: "",
+                    })
+                  }
+                  disabled={
+                    incidentStatus === "RESOLVED" ||
+                    incidentStatus === "REJECTED" ||
+                    resolveReportMutation.isPending
+                  }
+                >
+                  <CheckCircle2 size={15} /> Resolve
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    setResolutionDialog({
+                      mode: "REJECTED",
+                      reportId:
+                        selectedIncident.reportId ?? selectedIncidentReportId ?? 0,
+                      reportLabel: selectedIncident.id,
+                      remarks: "",
+                    })
+                  }
+                  disabled={
+                    incidentStatus === "RESOLVED" ||
+                    incidentStatus === "REJECTED" ||
+                    resolveReportMutation.isPending
+                  }
+                >
+                  <XCircle size={15} /> Reject
+                </Button>
               </div>
             )}
             {(isAdmin || isStaff) &&
@@ -2585,7 +2594,7 @@ function WorkspaceView({
     onOpenIncident?.(
       {
         id: report.reportCode,
-        type: report.reportType,
+        type: getRiskReportHeadline(report),
         location: report.location,
         priority: report.priority,
         time: report.createdAt ? new Date(report.createdAt).toLocaleString() : "—",
@@ -3058,7 +3067,7 @@ function WorkspaceView({
     : active === "Resources" && (resources !== undefined || liveResources !== undefined)
       ? visibleResourceRows.map(resource => [resource.name, `${resource.quantity} ${resource.unit}`, resource.status])
     : active === "Risk reports" && liveReports !== undefined
-      ? (filteredLiveReports ?? []).map(report => [report.reportCode, report.reportType, report.location, report.status])
+      ? (filteredLiveReports ?? []).map(report => [report.reportCode, getRiskReportHeadline(report), report.location, report.status])
       : active === "Evacuees" && evacuees !== undefined
         ? visibleEvacueeRows.map(evacuee => [
             `${evacuee.firstName} ${evacuee.lastName}`.trim(),
@@ -3067,7 +3076,7 @@ function WorkspaceView({
             evacuee.status,
           ])
       : active === "Alerts" && workspaceAlerts !== undefined
-        ? workspaceAlertsForRole.map(alert => [alert.title, alertAudienceLabels[alert.targetAudience] ?? alert.targetAudience, alert.priority, alert.isActive ? "ACTIVE" : "ENDED"])
+        ? workspaceAlertsForRole.map(alert => [getAlertHeadline(alert), alertAudienceLabels[alert.targetAudience] ?? alert.targetAudience, alert.priority, alert.isActive ? "ACTIVE" : "ENDED"])
       : active === "Safety advice" && adviceItems !== undefined
         ? adviceItems.map(item => [
             item.isEmergency ? `${item.title} (urgent)` : item.title,
@@ -3824,7 +3833,7 @@ function WorkspaceView({
               {(activeIncidentReports ?? []).filter(report => report.latitude != null && report.longitude != null).map(report => (
                 <CircleMarker key={report.id} center={[Number(report.latitude), Number(report.longitude)]} radius={11} pathOptions={{ color: "#a63f38", fillColor: "#ef8b82", fillOpacity: 0.95 }}>
                   <Popup>
-                    <strong>{report.reportCode} · {report.reportType}</strong><br />
+                    <strong>{report.reportCode} · {getRiskReportHeadline(report)}</strong><br />
                     {report.location}<br />
                     {report.priority} · {report.status}<br />
                     <a href={`https://www.google.com/maps/dir/?api=1&destination=${report.latitude},${report.longitude}`} target="_blank" rel="noreferrer">Go there</a>
@@ -3834,17 +3843,27 @@ function WorkspaceView({
             </MapContainer>
           </div>
           <div className="responder-incident-list">
-            {(activeIncidentReports ?? []).map(report => (
-                  <article className="responder-incident-item" key={report.id}>
-                <div><strong>{report.reportCode}</strong><span>{report.reportType}</span></div>
+            {(activeIncidentReports ?? []).map(report => {
+              // Client §26: exactly two review actions — Resolve and Reject —
+              // and they stop working once the report is closed.
+              const isClosed = report.status === "RESOLVED" || report.status === "REJECTED";
+              return (
+              <article className="responder-incident-item" key={report.id}>
+                <div><strong>{report.reportCode}</strong><span>{getRiskReportHeadline(report)}</span></div>
                 <p>{report.location}</p>
-                <button type="button" className="incident-timeline-button" onClick={() => onOpenIncident?.({ id: report.reportCode, type: report.reportType, location: report.location, priority: report.priority, time: "Live report", color: report.priority === "CRITICAL" ? "rose" : report.priority === "HIGH" ? "amber" : "blue", reportId: report.id, status: report.status, createdAt: report.createdAt, resolution: report.resolution, assignedResponderId: report.assignedResponderId ?? null }, report.id)}>View incident timeline <ChevronRight size={14} /></button>
+                <button type="button" className="incident-timeline-button" onClick={() => onOpenIncident?.({ id: report.reportCode, type: getRiskReportHeadline(report), location: report.location, priority: report.priority, time: "Live report", color: report.priority === "CRITICAL" ? "rose" : report.priority === "HIGH" ? "amber" : "blue", reportId: report.id, status: report.status, createdAt: report.createdAt, resolution: report.resolution, assignedResponderId: report.assignedResponderId ?? null }, report.id)}>View incident timeline <ChevronRight size={14} /></button>
                 <div className="responder-incident-actions">
                   {report.latitude != null && report.longitude != null ? <a href={`https://www.google.com/maps/dir/?api=1&destination=${report.latitude},${report.longitude}`} target="_blank" rel="noreferrer"><MapPin size={14} /> Go there</a> : <small>Exact coordinates are not available for this report.</small>}
-                  {report.status === "RESOLVED" ? <small><CheckCircle2 size={14} /> Done</small> : (user?.role === "responder" || user?.role === "admin") && canTransitionReport(report.status as ReportStatus, "RESOLVED") && <Button type="button" variant="outline" onClick={() => requestResolution("RESOLVED", report.id, report.reportCode)} disabled={updateRiskReportMutation.isPending}><CheckCircle2 size={14} /> Mark done</Button>}
+                  {(user?.role === "responder" || user?.role === "admin") && (
+                    <>
+                      <Button type="button" variant="outline" onClick={() => requestResolution("RESOLVED", report.id, report.reportCode)} disabled={isClosed || updateRiskReportMutation.isPending}><CheckCircle2 size={14} /> Resolve</Button>
+                      <Button type="button" variant="outline" onClick={() => requestResolution("REJECTED", report.id, report.reportCode)} disabled={isClosed || updateRiskReportMutation.isPending}><XCircle size={14} /> Reject</Button>
+                    </>
+                  )}
                 </div>
               </article>
-            ))}
+              );
+            })}
             {!activeIncidentReports?.length && (
               <p className="empty-copy">
                 No active incidents right now. New reports from citizens will
@@ -4046,14 +4065,18 @@ function WorkspaceView({
         ) : (
         <div className="responder-incident-list" style={{ maxHeight: "none", padding: "1rem" }}>
           {filteredReports.length === 0 && <p className="empty-copy">No incident reports found.</p>}
-          {filteredReports.map(report => (
+          {filteredReports.map(report => {
+            // Client §26: exactly two review actions, no dropdown — and both
+            // are disabled once the report is resolved or rejected.
+            const isClosed = report.status === "RESOLVED" || report.status === "REJECTED";
+            return (
             <article className={`responder-incident-item${report.status === "PENDING" ? " unreviewed" : ""}`} key={report.id}>
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                 <strong>{report.reportCode}</strong>
                 {report.status === "PENDING" && (
                   <span className="incident-new-badge" title="Unreviewed — no responder has acted on it yet">NEW</span>
                 )}
-                <span>{report.reportType}</span>
+                <span>{getRiskReportHeadline(report)}</span>
                 <span className={`table-status ${priorityColor(report.priority)}`}>{report.priority}</span>
                 <span className={`table-status ${report.status === "RESOLVED" ? "teal" : report.status === "IN_PROGRESS" ? "blue" : report.status === "REJECTED" ? "rose" : "amber"}`}>{report.status}</span>
               </div>
@@ -4063,7 +4086,7 @@ function WorkspaceView({
                 className="incident-timeline-button"
                 onClick={() => onOpenIncident?.({
                   id: report.reportCode,
-                  type: report.reportType,
+                  type: getRiskReportHeadline(report),
                   location: report.location,
                   priority: report.priority,
                   time: report.createdAt ? new Date(report.createdAt).toLocaleString() : "—",
@@ -4079,39 +4102,20 @@ function WorkspaceView({
                 {report.latitude != null && report.longitude != null
                   ? <a href={`https://www.google.com/maps/dir/?api=1&destination=${report.latitude},${report.longitude}`} target="_blank" rel="noreferrer"><MapPin size={14} /> Go there</a>
                   : <small>No coordinates on this report.</small>}
-                {report.status === "RESOLVED"
-                  ? <small><CheckCircle2 size={14} /> Resolved</small>
-                  : (user?.role === "responder" || user?.role === "admin") && <>
-                    <select
-                      aria-label="Update report status"
-                      className="role-select"
-                      value={report.status}
-                      onChange={e => {
-                        if (!isStaticSession()) {
-                          updateRiskReportMutation.mutate({ reportId: report.id, status: e.target.value as ReportStatus });
-                        }
-                      }}
-                    >
-                      {(["PENDING", "VERIFIED", "IN_PROGRESS", "RESOLVED", "REJECTED"] as ReportStatus[]).map(option => (
-                        <option key={option} value={option} disabled={option !== report.status && !canTransitionReport(report.status as ReportStatus, option)}>
-                          {option}
-                        </option>
-                      ))}
-                    </select>
-                    {canTransitionReport(report.status as ReportStatus, "RESOLVED") && (
-                      <Button type="button" variant="outline" onClick={() => requestResolution("RESOLVED", report.id, report.reportCode)} disabled={updateRiskReportMutation.isPending}>
-                        <CheckCircle2 size={14} /> Mark done
-                      </Button>
-                    )}
-                    {canTransitionReport(report.status as ReportStatus, "REJECTED") && (
-                      <Button type="button" variant="outline" onClick={() => requestResolution("REJECTED", report.id, report.reportCode)} disabled={updateRiskReportMutation.isPending}>
-                        <XCircle size={14} /> Reject
-                      </Button>
-                    )}
-                  </>}
+                {(user?.role === "responder" || user?.role === "admin") && (
+                  <>
+                    <Button type="button" onClick={() => requestResolution("RESOLVED", report.id, report.reportCode)} disabled={isClosed || updateRiskReportMutation.isPending}>
+                      <CheckCircle2 size={14} /> Resolve
+                    </Button>
+                    <Button type="button" variant="outline" onClick={() => requestResolution("REJECTED", report.id, report.reportCode)} disabled={isClosed || updateRiskReportMutation.isPending}>
+                      <XCircle size={14} /> Reject
+                    </Button>
+                  </>
+                )}
               </div>
             </article>
-          ))}
+            );
+          })}
         </div>
         )}
       </section>
@@ -4180,7 +4184,7 @@ function WorkspaceView({
                             }
                           >
                             <strong>{cell}</strong>
-                            <span className="alert-table-tag">{alertMessages[index].alertType}</span>
+                            <span className="alert-table-tag">{alertMessages[index].alertType.replace(/_/g, " ").toLowerCase()}</span>
                             <p>{alertMessages[index].message}</p>
                             {canOpenAlert && (
                               <span className="alert-open-hint">Open incident <ChevronRight size={13} /></span>
@@ -4293,7 +4297,7 @@ function WorkspaceView({
                   <td>
                     <Button type="button" variant="outline" disabled={endAlertMutation.isPending} onClick={() => {
                       const alert = workspaceAlertsForRole[index];
-                      if (!window.confirm(`End "${alert.title}"? It will disappear from every dashboard immediately.`)) return;
+                      if (!window.confirm(`End "${getAlertHeadline(alert)}"? It will disappear from every dashboard immediately.`)) return;
                       endAlertMutation.mutate({ alertId: alert.id });
                     }}>
                       <CheckCircle2 size={14} /> End alert

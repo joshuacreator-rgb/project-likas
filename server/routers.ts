@@ -12,7 +12,7 @@ import {
 } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { clearRateLimit, enforceRateLimit } from "./_core/rateLimit";
-import { getResourceStatus, canTransitionReport, describeAssignmentNotification, type ReportStatus } from "../shared/operations";
+import { getResourceStatus, canTransitionReport, describeAssignmentNotification, getRiskReportHeadline, type ReportStatus } from "../shared/operations";
 import { sendInvitationEmail, sendPasswordResetEmail } from "./_core/email";
 import {
   isRoleSelectionAllowed,
@@ -1283,9 +1283,12 @@ export const appRouter = router({
             ? ` Pin: https://www.google.com/maps/search/?api=1&query=${input.latitude},${input.longitude}`
             : "";
           try {
+            // Client §26: the alert heading is the actual emergency name (the
+            // report type, or the citizen's own first line for legacy-label
+            // reports), with reporter, time, location and description below.
             const responderAlert = await createAlert({
-              title: `${input.priority} citizen emergency`,
-              message: `${input.reportType} reported at ${input.location}: ${input.description}.${coordinates}`,
+              title: getRiskReportHeadline(report),
+              message: `${report.reportCode}: ${input.description} Reported by ${ctx.user.name || "Unknown"} at ${new Date().toLocaleString()}. Location: ${input.location}.${coordinates}`,
               alertType: "CITIZEN_EMERGENCY",
               priority: input.priority,
               targetAudience: "RESPONDERS",
@@ -1293,7 +1296,7 @@ export const appRouter = router({
               createdBy: ctx.user.id,
             });
             const alert = await getAlertById(responderAlert.id);
-            if (alert) broadcastAlert(alert, alert.targetAudience);
+            if (alert) broadcastAlert(alert);
           } catch (error) {
             console.warn("[Operations] Citizen emergency notification failed:", error);
           }
@@ -1363,9 +1366,14 @@ export const appRouter = router({
         }
         if (changes.status === "REJECTED") {
           try {
+            // Client §26: the heading carries the actual emergency name; the
+            // body adds the reporter and when the incident was reported.
+            const reportedAt = report.reportedAt
+              ? new Date(report.reportedAt).toLocaleString()
+              : "an unrecorded time";
             const notification = await createAlert({
-              title: `${report.priority} incident rejected`,
-              message: `${report.reportCode || `Incident ${report.id}`} was rejected at ${report.location}: ${report.description}. ${changes.resolution ? `Note: ${changes.resolution}` : "No note provided."}`,
+              title: `${getRiskReportHeadline(report)} — rejected`,
+              message: `${report.reportCode || `Incident ${report.id}`} was rejected: ${report.description} Reporter: ${report.complainantName || "Unknown"}. Reported ${reportedAt}. Location: ${report.location}. ${changes.resolution ? `Note: ${changes.resolution}` : "No note provided."}`,
               alertType: "INCIDENT_REJECTED",
               priority: report.priority,
               targetAudience: "ADMIN",
@@ -1373,7 +1381,7 @@ export const appRouter = router({
               createdBy: ctx.user.id,
             });
             const savedAlert = notification ? await getAlertById(notification.id) : undefined;
-            if (savedAlert) broadcastAlert(savedAlert, savedAlert.targetAudience);
+            if (savedAlert) broadcastAlert(savedAlert);
           } catch (error) {
             console.warn("[Operations] Incident rejection notification failed:", error);
           }
@@ -1398,7 +1406,7 @@ export const appRouter = router({
         });
         return result;
       }),
-    incidentTimeline: roleProcedure(["admin", "responder"])
+    incidentTimeline: roleProcedure(["admin", "responder", "staff"])
       .input(z.object({ reportId: z.number().int().positive() }))
       .query(async ({ ctx, input }) => {
         const report = await getRiskReportById(input.reportId);
@@ -1492,9 +1500,10 @@ export const appRouter = router({
             // Spec 4.1: the responder's notification carries the whole
             // assignment — status, assigned time and whether attachments are
             // waiting — so the incident can be assessed before it is opened.
+            // Client §26: the heading is the actual emergency name.
             const attachmentCount = await countStoredEvidenceForReport(report.id);
             const alert = await createAlert({
-              title: `${report.priority} incident assignment`,
+              title: `${getRiskReportHeadline(report)} — assignment`,
               message: describeAssignmentNotification(
                 // The report snapshot was read before the assignment wrote its
                 // IN_PROGRESS transition — the notification must state the
@@ -1512,7 +1521,7 @@ export const appRouter = router({
               createdBy: ctx.user.id,
             });
             const savedAlert = await getAlertById(alert.id);
-            if (savedAlert) broadcastAlert(savedAlert, savedAlert.targetAudience);
+            if (savedAlert) broadcastAlert(savedAlert);
           } catch (error) {
             console.warn("[Operations] Responder dispatch notification failed:", error);
           }
@@ -1541,10 +1550,11 @@ export const appRouter = router({
       }),
     alerts: roleProcedure(allowedRoles).query(() => listAlerts()),
     notifyResponders: roleProcedure(["admin", "staff"]).input(z.object({ incidentId: z.string().min(1), incidentType: z.string().min(2), location: z.string().min(2), priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]) })).mutation(async ({ ctx, input }) => {
-      const result = await createAlert({ title: `${input.priority} incident: ${input.incidentType}`, message: `${input.incidentId} requires responder attention at ${input.location}.`, alertType: "INCIDENT_ASSIGNMENT", priority: input.priority, targetAudience: "RESPONDERS", createdBy: ctx.user.id });
+      // Client §26: the heading is the actual emergency name the dispatcher typed.
+      const result = await createAlert({ title: `${input.incidentType} — responder alert`, message: `${input.incidentId} requires responder attention at ${input.location}. Notified ${new Date().toLocaleString()}.`, alertType: "INCIDENT_ASSIGNMENT", priority: input.priority, targetAudience: "RESPONDERS", createdBy: ctx.user.id });
       await logActivity({ actorId: ctx.user.id, action: "NOTIFY_RESPONDERS", entityType: "risk_report", metadata: JSON.stringify({ incidentId: input.incidentId, alertId: result.id }) });
       const notifyAlert = await getAlertById(result.id);
-      if (notifyAlert) broadcastAlert(notifyAlert, notifyAlert.targetAudience);
+      if (notifyAlert) broadcastAlert(notifyAlert);
       return result;
     }),
     weather: roleProcedure(allowedRoles).query(() => getWeatherSnapshot()),
@@ -2104,7 +2114,7 @@ export const appRouter = router({
           entityId: result.id,
         });
         const createdAlert = await getAlertById(result.id);
-        if (createdAlert) broadcastAlert(createdAlert, createdAlert.targetAudience);
+        if (createdAlert) broadcastAlert(createdAlert);
         return result;
       }),
     endAlert: adminProcedure

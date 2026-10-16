@@ -49,7 +49,7 @@ describe("broadcastAlertEnded delivery", () => {
     Object.keys(received).forEach((k) => delete received[k]);
   });
 
-  it("reaches admin and responder dashboards for a RESPONDERS-targeted alert", () => {
+  it("reaches responder and staff dashboards for a RESPONDERS-targeted incident alert", () => {
     subscribe("admin");
     subscribe("responder");
     subscribe("staff");
@@ -59,9 +59,11 @@ describe("broadcastAlertEnded delivery", () => {
 
     expect(received.admin).toHaveLength(1);
     expect(received.responder).toHaveLength(1);
-    // Targeted audiences stay targeted: staff and citizens never received the
-    // live RESPONDERS alert, so they must not receive the end either.
-    expect(received.staff).toHaveLength(0);
+    // Client §26: staff receive incident notifications live, so their end must
+    // reach them too — a resolved report's alert may not stay ACTIVE on an
+    // open staff dashboard.
+    expect(received.staff).toHaveLength(1);
+    // Citizens never received the live alert, so they get no end either.
     expect(received.citizen).toHaveLength(0);
   });
 
@@ -77,13 +79,31 @@ describe("broadcastAlertEnded delivery", () => {
     expect(received.responder).toHaveLength(1);
   });
 
-  it("keeps regular create broadcasts audience-limited (admin sees no RESPONDERS create)", () => {
+  it("delivers a live incident alert to staff alongside its audience (client §26)", () => {
     subscribe("admin");
     subscribe("responder");
+    subscribe("staff");
+    subscribe("citizen");
 
-    broadcastAlert(makeAlert({ targetAudience: "RESPONDERS" }), "RESPONDERS");
+    broadcastAlert(makeAlert({ targetAudience: "RESPONDERS" }));
 
-    expect(received.admin).toHaveLength(0);
     expect(received.responder).toHaveLength(1);
+    expect(received.staff).toHaveLength(1);
+    // Admin live delivery and citizen delivery stay audience-limited.
+    expect(received.admin).toHaveLength(0);
+    expect(received.citizen).toHaveLength(0);
+  });
+
+  it("keeps non-incident create broadcasts audience-limited", () => {
+    subscribe("responder");
+    subscribe("staff");
+
+    broadcastAlert({
+      ...makeAlert({ targetAudience: "RESPONDERS", id: 2 }),
+      alertType: "GENERAL_UPDATE",
+    });
+
+    expect(received.responder).toHaveLength(1);
+    expect(received.staff).toHaveLength(0);
   });
 });

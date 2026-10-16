@@ -25,6 +25,12 @@
 //   - 1.8 + 3.4: a headless two-tab browser run — a dashboard tab is kicked to
 //     /login the moment a second tab signs in, and the responder queue shows
 //     the sort control plus the NEW badge on the unreviewed report.
+//   - client §26 (alerts/notifications rework): staff receive the incident
+//     notifications (citizen emergency, assignment, rejection) with the actual
+//     emergency name as the heading and reporter/location/description/time in
+//     the body — one row per event, ended alerts drop off staff too — and the
+//     Risk reports list offers exactly Resolve + Reject (no status dropdown),
+//     both disabled once the report is closed.
 //
 //   railway connect mysql --tunnel-only -P 3307   (background)
 //   MYSQL_USER=... MYSQL_PASSWORD=... MYSQL_DATABASE=... node verify-clusters-live.mjs
@@ -37,6 +43,7 @@ const PW = `ClusterCheck-${stamp}-a1`;
 const CITIZEN_EMAIL = `cluster.citizen.${stamp}@gmail.com`;
 const RESPONDER_EMAIL = `cluster.responder.${stamp}@gmail.com`;
 const ADMIN_EMAIL = `cluster.admin.${stamp}@gmail.com`;
+const STAFF_EMAIL = `cluster.staff.${stamp}@gmail.com`;
 const CODE_B = `CLUSTER-B-${stamp}`.toUpperCase();
 
 const checks = [];
@@ -103,10 +110,11 @@ async function main() {
   const db = await connectDb();
   if (!db) { console.log("DB tunnel unreachable — cannot provision test accounts. Aborting."); process.exit(2); }
 
-  console.log("0. Provision responder + admin over the DB tunnel");
+  console.log("0. Provision responder + admin + staff over the DB tunnel");
   const responderDbId = await provisionOperational(db, RESPONDER_EMAIL, "responder", "Ramon", "Responder");
   const adminDbId = await provisionOperational(db, ADMIN_EMAIL, "admin", "Ana", "Admin");
-  record(Boolean(responderDbId) && Boolean(adminDbId), "operational accounts inserted", `responderId=${responderDbId} adminId=${adminDbId}`);
+  const staffDbId = await provisionOperational(db, STAFF_EMAIL, "staff", "Sonia", "Staff");
+  record(Boolean(responderDbId) && Boolean(adminDbId) && Boolean(staffDbId), "operational accounts inserted", `responderId=${responderDbId} adminId=${adminDbId} staffId=${staffDbId}`);
 
   console.log("\n1. Register + login (atomic account + registry row, spec 5.6)");
   const reg = await trpc("localAuth.register", {
@@ -122,10 +130,12 @@ async function main() {
   const citizen = await trpc("localAuth.login", { method: "POST", input: { email: CITIZEN_EMAIL, password: PW, role: "citizen" } });
   const responder = await trpc("localAuth.login", { method: "POST", input: { email: RESPONDER_EMAIL, password: PW, role: "responder" } });
   const admin = await trpc("localAuth.login", { method: "POST", input: { email: ADMIN_EMAIL, password: PW, role: "admin" } });
+  const staff = await trpc("localAuth.login", { method: "POST", input: { email: STAFF_EMAIL, password: PW, role: "staff" } });
   record(!citizen.error, "citizen login", citizen.error ?? "");
   record(!responder.error, "responder login", responder.error ?? "");
   record(!admin.error, "admin login", admin.error ?? "");
-  if (citizen.error || responder.error || admin.error) {
+  record(!staff.error, "staff login", staff.error ?? "");
+  if (citizen.error || responder.error || admin.error || staff.error) {
     console.log("\nAborting: logins failed, remaining steps need sessions.");
     return finish(db, null, null);
   }
@@ -192,6 +202,28 @@ async function main() {
     record(/google\.com\/maps/i.test(alert.message), "alert carries a maps pin");
   }
 
+  console.log("\n4b. Staff receive the incident notifications (client §26)");
+  const sAlerts = await trpc("operations.alerts", { cookie: staff.cookie });
+  record(!sAlerts.error, "staff alerts query answers", sAlerts.error ?? "");
+  const staffEmergency = (sAlerts.value ?? []).filter(a => a.reportId === idA && a.alertType === "CITIZEN_EMERGENCY");
+  record(staffEmergency.length === 1, "staff see exactly ONE citizen-emergency alert for report A (no duplicates)", `count=${staffEmergency.length}`);
+  if (staffEmergency[0]) {
+    console.log("    staff alert title:", JSON.stringify(staffEmergency[0].title));
+    console.log("    staff alert message:", JSON.stringify(staffEmergency[0].message));
+    record(staffEmergency[0].title === "Automated cluster verification report — safe to delete.",
+      "alert heading is the actual emergency name, not citizen_emergency", staffEmergency[0].title);
+    record(/Reported by Clara/.test(staffEmergency[0].message), "alert message names the reporter");
+    record(/Pateros test coordinates/.test(staffEmergency[0].message), "alert message carries the location");
+    record(/Automated cluster verification report/.test(staffEmergency[0].message), "alert message carries the description");
+    record(/Reported /.test(staffEmergency[0].message), "alert message carries the report time");
+  }
+  const staffAssignment = (sAlerts.value ?? []).find(a => a.reportId === idA && a.alertType === "INCIDENT_ASSIGNMENT");
+  record(Boolean(staffAssignment) && /— assignment$/.test(staffAssignment?.title ?? ""),
+    "staff also receive the assignment notification, headed by the emergency name", staffAssignment?.title ?? "missing");
+  const staffTimeline = await trpc("operations.incidentTimeline", { cookie: staff.cookie, input: { reportId: idA } });
+  record(!staffTimeline.error && staffTimeline.value?.report?.reportCode != null,
+    "staff can open the incident details behind the notification (link works)", staffTimeline.error ?? "ok");
+
   const respondersBusy = await trpc("operations.listResponders", { cookie: admin.cookie });
   const busyMe = (respondersBusy.value ?? []).find(r => r.id === me.id);
   record(busyMe?.available === false && (busyMe?.openIncidentCount ?? 0) >= 1,
@@ -219,6 +251,8 @@ async function main() {
   record(/site cleared/.test(rowA2?.resolution ?? ""), "resolution remarks stored", JSON.stringify(rowA2?.resolution ?? null));
   const rAlerts2 = await trpc("operations.alerts", { cookie: responder.cookie });
   record(!(rAlerts2.value ?? []).some(a => a.reportId === idA), "linked alert ended after resolve");
+  const sAlerts2 = await trpc("operations.alerts", { cookie: staff.cookie });
+  record(!(sAlerts2.value ?? []).some(a => a.reportId === idA), "staff dashboards drop the ended alert too (client §26)");
   const timeline2 = await trpc("operations.incidentTimeline", { cookie: responder.cookie, input: { reportId: idA } });
   const audit2 = timeline2.value?.auditTrail ?? [];
   record(audit2.some(e => e.action === "INCIDENT_STATUS_CHANGED" && /Ramon/.test(e.actorName ?? "")),
@@ -238,6 +272,17 @@ async function main() {
   const rowB = (reports3.value ?? []).find(r => r.id === idB);
   record(rowB?.status === "REJECTED", "report B REJECTED", `status=${rowB?.status}`);
   record(/duplicate/.test(rowB?.resolution ?? ""), "rejection note stored");
+  const sAlerts3 = await trpc("operations.alerts", { cookie: staff.cookie });
+  const staffReject = (sAlerts3.value ?? []).find(a => a.reportId === idB && a.alertType === "INCIDENT_REJECTED");
+  record(Boolean(staffReject), "staff receive the rejection notification too (client §26)", staffReject?.title ?? "missing");
+  if (staffReject) {
+    console.log("    staff reject alert:", JSON.stringify(staffReject.title), "|", JSON.stringify(staffReject.message));
+    record(staffReject.title === "Automated cluster verification report — safe to delete. — rejected",
+      "rejection heading carries the actual emergency name", staffReject.title);
+    record(/Reporter: Clara/.test(staffReject.message), "rejection message names the reporter");
+    record(/Reported /.test(staffReject.message), "rejection message carries the reported time");
+    record(/duplicate/.test(staffReject.message), "rejection message carries the note");
+  }
 
   console.log("\n7b. Demo-accounts list is alphabetized (spec 5.29)");
   const probeZ = await trpc("admin.provisionDemoAccount", { method: "POST", cookie: admin.cookie, input: { name: `Zulu Probe ${stamp}`, role: "citizen", expiresInDays: 1 } });
@@ -256,7 +301,7 @@ async function main() {
   await browserKickCheck();
 
   const probeEmails = [probeZ.value?.email, probeA.value?.email].filter(Boolean);
-  await finish(db, { idA, idB, idC, me, apiOrder }, { responderDbId, adminDbId }, probeEmails);
+  await finish(db, { idA, idB, idC, me, apiOrder }, { responderDbId, adminDbId, staffDbId }, probeEmails);
 }
 
 /**
@@ -378,6 +423,31 @@ async function browserKickCheck() {
       `chip=${JSON.stringify(drillInfo?.chip)} items=${drillInfo?.items}`);
     record((drillInfo?.unreviewed ?? 0) >= 1 && Boolean(drillInfo?.badge),
       "Risk reports list highlights the unreviewed report with NEW (3.4)", `rows=${drillInfo?.unreviewed}`);
+
+    // Client §26: the Risk reports list shows exactly two review actions —
+    // Resolve and Reject — and no status dropdown. Under the ACTIVE filter the
+    // REJECTED report B and the PENDING report C are both visible: the closed
+    // report's buttons are disabled, the open report's are live.
+    const reviewInfo = await page2.evaluate(() => {
+      const rows = [...document.querySelectorAll("article.responder-incident-item")];
+      const rowWithStatus = status => rows.find(r => [...r.querySelectorAll("span")].some(sp => (sp.textContent ?? "").trim() === status));
+      const buttons = row => row ? ["Resolve", "Reject"].map(label => {
+        const b = [...row.querySelectorAll("button")].find(btn => (btn.textContent ?? "").trim().startsWith(label));
+        return b ? `${label}:${b.disabled ? "disabled" : "enabled"}` : `${label}:missing`;
+      }) : ["row:missing"];
+      return {
+        statusSelects: document.querySelectorAll('select[aria-label="Update report status"]').length,
+        closed: buttons(rowWithStatus("REJECTED")),
+        open: buttons(rowWithStatus("PENDING")),
+      };
+    }).catch(() => null);
+    record((reviewInfo?.statusSelects ?? -1) === 0,
+      "Risk reports list has no status dropdown — Resolve and Reject buttons only (client §26)",
+      `selects=${reviewInfo?.statusSelects}`);
+    record(JSON.stringify(reviewInfo?.closed) === JSON.stringify(["Resolve:disabled", "Reject:disabled"]),
+      "closed (REJECTED) report shows both review buttons disabled (client §26)", JSON.stringify(reviewInfo?.closed));
+    record(JSON.stringify(reviewInfo?.open) === JSON.stringify(["Resolve:enabled", "Reject:enabled"]),
+      "open (PENDING) report shows both review buttons enabled (client §26)", JSON.stringify(reviewInfo?.open));
 
     // Specs 2.7: two cold tabs with request interception — one blocks the
     // summary query (metric skeleton → error banner → Retry recovery), the
@@ -532,8 +602,8 @@ async function finish(db, flow, provisioned, extraEmails = []) {
       record(sorted, "listResponders is ordered LN→FN→MN (5.29)", `n=${ids.length}`);
     }
 
-    const emails = [CITIZEN_EMAIL, RESPONDER_EMAIL, ADMIN_EMAIL, ...extraEmails];
-    const userIds = [flow ? null : null, provisioned?.responderDbId, provisioned?.adminDbId].filter(Boolean);
+    const emails = [CITIZEN_EMAIL, RESPONDER_EMAIL, ADMIN_EMAIL, STAFF_EMAIL, ...extraEmails];
+    const userIds = [flow ? null : null, provisioned?.responderDbId, provisioned?.adminDbId, provisioned?.staffDbId].filter(Boolean);
     const [citizenRows] = await db.query("SELECT id FROM users WHERE email = ?", [CITIZEN_EMAIL]);
     for (const id of citizenRows.map(r => r.id)) userIds.push(id);
     if (flow) {

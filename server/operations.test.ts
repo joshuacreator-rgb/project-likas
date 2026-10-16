@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alertsVisibleToRole, calculateCenterMetrics, canTransitionReport, describeAssignmentNotification, evacueeMatchesSearch, getResourceStatus, resolveNotificationDelivery } from "../shared/operations";
+import { alertDeliveryRoles, alertsVisibleToRole, calculateCenterMetrics, canTransitionReport, describeAssignmentNotification, evacueeMatchesSearch, getResourceStatus, resolveNotificationDelivery } from "../shared/operations";
 
 describe("Project Likas operational rules", () => {
   it("prevents registration at a full center and calculates its occupancy", () => {
@@ -29,16 +29,18 @@ describe("Project Likas operational rules", () => {
     expect(canTransitionReport("PENDING", "VERIFIED")).toBe(true);
     expect(canTransitionReport("VERIFIED", "IN_PROGRESS")).toBe(true);
     expect(canTransitionReport("IN_PROGRESS", "RESOLVED")).toBe(true);
-    expect(canTransitionReport("PENDING", "RESOLVED")).toBe(false);
+    // Client §26: Resolve works directly from any open state…
+    expect(canTransitionReport("PENDING", "RESOLVED")).toBe(true);
+    // …but nothing comes back out of a closed report.
     expect(canTransitionReport("RESOLVED", "PENDING")).toBe(false);
   });
 
   it("allows only the full valid transition map for incident statuses", () => {
     const statuses = ["PENDING", "VERIFIED", "IN_PROGRESS", "RESOLVED", "REJECTED"] as const;
     const expected: Record<(typeof statuses)[number], (typeof statuses)[number][]> = {
-      PENDING: ["PENDING", "VERIFIED", "REJECTED"],
-      VERIFIED: ["VERIFIED", "IN_PROGRESS", "REJECTED"],
-      IN_PROGRESS: ["IN_PROGRESS", "RESOLVED"],
+      PENDING: ["PENDING", "VERIFIED", "RESOLVED", "REJECTED"],
+      VERIFIED: ["VERIFIED", "IN_PROGRESS", "RESOLVED", "REJECTED"],
+      IN_PROGRESS: ["IN_PROGRESS", "RESOLVED", "REJECTED"],
       RESOLVED: ["RESOLVED"],
       REJECTED: ["REJECTED"],
     };
@@ -51,9 +53,8 @@ describe("Project Likas operational rules", () => {
 
   it("never lets a skipped or backwards status change through", () => {
     expect(canTransitionReport("PENDING", "IN_PROGRESS")).toBe(false);
-    expect(canTransitionReport("VERIFIED", "RESOLVED")).toBe(false);
     expect(canTransitionReport("IN_PROGRESS", "VERIFIED")).toBe(false);
-    expect(canTransitionReport("IN_PROGRESS", "REJECTED")).toBe(false);
+    expect(canTransitionReport("VERIFIED", "PENDING")).toBe(false);
     expect(canTransitionReport("RESOLVED", "REJECTED")).toBe(false);
   });
 
@@ -68,6 +69,26 @@ describe("Project Likas operational rules", () => {
     expect(alertsVisibleToRole(alerts, "staff").map(a => a.id)).toEqual([2, 3]);
     expect(alertsVisibleToRole(alerts, "admin").map(a => a.id)).toEqual([1, 2, 3]);
     expect(alertsVisibleToRole(undefined, "responder")).toEqual([]);
+  });
+
+  it("also shows staff the incident notifications (client §26)", () => {
+    const alerts = [
+      { id: 1, title: "Fire", message: "m", alertType: "CITIZEN_EMERGENCY", priority: "HIGH", targetAudience: "RESPONDERS", isActive: true, createdAt: new Date() },
+      { id: 2, title: "Flood — assignment", message: "m", alertType: "INCIDENT_ASSIGNMENT", priority: "MEDIUM", targetAudience: "RESPONDERS", isActive: true, createdAt: new Date() },
+      { id: 3, title: "Flood — rejected", message: "m", alertType: "INCIDENT_REJECTED", priority: "LOW", targetAudience: "ADMIN", isActive: true, createdAt: new Date() },
+      { id: 4, title: "Advisory", message: "m", alertType: "GENERAL_UPDATE", priority: "LOW", targetAudience: "RESPONDERS", isActive: true, createdAt: new Date() },
+    ] as const;
+    // Staff receive the three incident notifications; the responder-only
+    // general update stays responder-only.
+    expect(alertsVisibleToRole(alerts, "staff").map(a => a.id)).toEqual([1, 2, 3]);
+    expect(alertsVisibleToRole(alerts, "responder").map(a => a.id)).toEqual([1, 2, 4]);
+  });
+
+  it("delivers incident notifications to staff alongside the stamped audience (client §26)", () => {
+    expect([...alertDeliveryRoles({ alertType: "CITIZEN_EMERGENCY", targetAudience: "RESPONDERS" })].sort()).toEqual(["responder", "staff"]);
+    expect([...alertDeliveryRoles({ alertType: "INCIDENT_REJECTED", targetAudience: "ADMIN" })].sort()).toEqual(["admin", "staff"]);
+    // A non-incident alert keeps its plain audience mapping.
+    expect(alertDeliveryRoles({ alertType: "GENERAL_UPDATE", targetAudience: "STAFF" })).toEqual(["staff"]);
   });
 
   it("falls back to in-app delivery when providers are not configured", () => {

@@ -82,6 +82,12 @@ describe("citizen emergency responder alert", () => {
     const alert = mockedDb.createAlert.mock.calls[0][0];
     expect(alert.message).toContain(reportInput.description);
     expect(alert.message).toContain(reportInput.location);
+    // Client §26: the heading is the actual emergency name — derived from the
+    // resident's description because the stored reportType is the legacy
+    // "Citizen emergency" label — with reporter, time and code below it.
+    expect(alert.title).toBe("Water is entering our home on Mabini Street");
+    expect(alert.message).toContain("CIT-1001");
+    expect(alert.message).toContain("Reported by Citizen");
     expect(alert.targetAudience).toBe("RESPONDERS");
     expect(alert.alertType).toBe("CITIZEN_EMERGENCY");
     // The alert is linked to the report so closing the report can end it.

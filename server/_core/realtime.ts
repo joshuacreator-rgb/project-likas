@@ -6,7 +6,7 @@ import type {
   RealtimeEvacueeEvent,
   RealtimeStreamPayload,
 } from "../../shared/citizen";
-import { realtimeAudienceRoles } from "../../shared/citizen";
+import { alertDeliveryRoles } from "../../shared/operations";
 
 type RealtimeSubscriber = {
   role: string;
@@ -39,22 +39,24 @@ export function broadcastIncident(incident: CitizenEmergencyNotification) {
   );
 }
 
-export function broadcastAlert(
-  alert: RealtimeAlert,
-  targetAudience: RealtimeAlert["targetAudience"] = "ALL_USERS"
-) {
-  deliver({ type: "alert", data: alert }, realtimeAudienceRoles(targetAudience));
+/**
+ * Live alert delivery (client §26): the audience it was stamped with, plus
+ * staff for incident notifications — one row, filtered per subscriber, so a
+ * role never receives the same alert twice.
+ */
+export function broadcastAlert(alert: RealtimeAlert) {
+  deliver({ type: "alert", data: alert }, alertDeliveryRoles(alert));
 }
 
 /**
  * An ended alert must reach every open dashboard that can display it. The
- * operations alert center shows a role everything it may see (admins see all),
- * so ending an alert cannot leave another open view showing it as ACTIVE (the
- * "alert stays active after the report is done" bug). The targeted audience is
+ * operations alert center shows a role everything it may see (admins see
+ * all), so ending an alert cannot leave another open view showing it as ACTIVE (the
+ * "alert stays active after the report is done" bug). The delivery roles are
  * therefore widened with the admin role when the end is broadcast.
  */
 export function broadcastAlertEnded(alert: RealtimeAlert) {
-  const roles = new Set<string>([...realtimeAudienceRoles(alert.targetAudience)]);
+  const roles = new Set<string>([...alertDeliveryRoles(alert)]);
   roles.add("admin");
   deliver({ type: "alert", data: alert }, Array.from(roles));
 }
