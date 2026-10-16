@@ -33,6 +33,10 @@
 //   - client §28: the Risk reports rows carry no Resolve/Reject buttons either
 //     (review actions live only inside Incident Details), and the print-media
 //     incident report contains the actual report content.
+//   - client §29: the responder nav has no Security entry and the staff nav no
+//     ID verification entry; the Incident Map page never clips its queue; and
+//     the incident timeline modal has no Notify responder button while its
+//     mini map resizes on open and zooms onto the incident location.
 //
 //   railway connect mysql --tunnel-only -P 3307   (background)
 //   MYSQL_USER=... MYSQL_PASSWORD=... MYSQL_DATABASE=... node verify-clusters-live.mjs
@@ -553,6 +557,27 @@ async function browserKickCheck() {
     } catch (e) {
       record(false, "incident print browser check failed", String(e).slice(0, 220));
     }
+    try {
+      await incidentMapCheck(browser, login);
+    } catch (e) {
+      record(false, "incident map browser check failed", String(e).slice(0, 220));
+    }
+    // Last: role nav checks take over the shared session, so they run after
+    // every admin check that needs it.
+    try {
+      await roleNavCheck(browser, login, RESPONDER_EMAIL, "responder", [
+        ["Security", false], ["Incident map", true], ["Risk reports", true],
+      ]);
+    } catch (e) {
+      record(false, "responder nav browser check failed", String(e).slice(0, 220));
+    }
+    try {
+      await roleNavCheck(browser, login, STAFF_EMAIL, "staff", [
+        ["ID verification", false], ["Evacuees", true], ["Alerts", true],
+      ]);
+    } catch (e) {
+      record(false, "staff nav browser check failed", String(e).slice(0, 220));
+    }
   } catch (e) {
     // A browser problem must not abort the run before finish() cleans up.
     record(false, "cross-tab kick browser check failed", String(e).slice(0, 220));
@@ -963,6 +988,111 @@ async function incidentPrintCheck(browser, login) {
       "printed page contains the actual incident report, not a blank sheet (client §28)",
       JSON.stringify(printState));
     await page.emulateMediaType(null);
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * Client §29: the Incident Map page must fit its map, incident queue and
+ * controls without clipping (the queue used to be sliced mid-card inside a
+ * hard 520px scroll box — now the page scrolls vertically and the map sticks
+ * beside the queue), and the incident timeline modal must carry no Notify
+ * responder button while its mini map resizes on open and auto-zooms onto the
+ * incident's location.
+ */
+async function incidentMapCheck(browser, login) {
+  const page = await browser.newPage();
+  try {
+    await page.setViewport({ width: 1440, height: 900 });
+    await login(page, ADMIN_EMAIL);
+    await evalPoll(page,
+      () => [...document.querySelectorAll(".side-nav button")].some(b => /Incident map/.test(b.textContent ?? "")),
+      s => s, 15000, 300);
+    await page.evaluate(() => {
+      const got = [...document.querySelectorAll("button")].find(b => /Got it/i.test(b.textContent ?? ""));
+      got?.click();
+      const nav = [...document.querySelectorAll(".side-nav button")].find(b => /Incident map/.test(b.textContent ?? ""));
+      nav?.click();
+    });
+    await page.waitForSelector(".responder-map.leaflet-container", { timeout: 20000 });
+    await evalPoll(page,
+      () => document.querySelectorAll(".responder-map .leaflet-tile-loaded").length > 0,
+      s => s, 15000, 400);
+
+    const layout = await page.evaluate(() => {
+      const list = document.querySelector(".responder-incident-list");
+      const frame = document.querySelector(".responder-map-frame");
+      if (!list || !frame) return null;
+      return {
+        listClipped: getComputedStyle(list).maxHeight !== "none",
+        mapSticky: getComputedStyle(frame).position === "sticky",
+        overflowX: document.scrollingElement.scrollWidth > document.scrollingElement.clientWidth + 1,
+      };
+    });
+    record(Boolean(layout) && layout.listClipped === false && layout.overflowX === false,
+      "incident map queue never clips — the page scrolls vertically instead (client §29)", JSON.stringify(layout));
+    record(Boolean(layout?.mapSticky),
+      "map stays in view beside the scrolling queue (sticky frame, client §29)", JSON.stringify(layout));
+
+    // Open the first incident's timeline from the map queue.
+    await page.evaluate(() => {
+      const btn = [...document.querySelectorAll(".responder-incident-item .incident-timeline-button")][0];
+      btn?.click();
+    });
+    await page.waitForSelector(".incident-detail-modal", { timeout: 20000 });
+    const notify = await page.evaluate(() =>
+      [...document.querySelectorAll(".report-modal button")].some(b => /Notify responder/i.test(b.textContent ?? "")));
+    record(notify === false, "incident timeline modal carries no Notify responder button (client §29)");
+
+    // The focus helper re-centres 250 ms after open; wait for it, then compare
+    // the marker's on-screen position with the canvas centre.
+    const mapInfo = await evalPoll(page,
+      () => {
+        const canvas = document.querySelector(".incident-map-canvas");
+        if (!canvas) return null;
+        const marker = canvas.querySelector(".leaflet-interactive");
+        const tiles = canvas.querySelectorAll(".leaflet-tile-loaded").length;
+        if (!marker || tiles === 0) return null;
+        const cr = canvas.getBoundingClientRect();
+        const mr = marker.getBoundingClientRect();
+        return {
+          tiles,
+          dx: Math.round(Math.abs((mr.left + mr.width / 2) - (cr.left + cr.width / 2))),
+          dy: Math.round(Math.abs((mr.top + mr.height / 2) - (cr.top + cr.height / 2))),
+        };
+      },
+      s => Boolean(s), 15000, 400);
+    record(Boolean(mapInfo) && mapInfo.tiles > 0,
+      "modal mini map renders its tiles and the incident marker (client §29)", JSON.stringify(mapInfo));
+    record(Boolean(mapInfo) && mapInfo.dx <= 30 && mapInfo.dy <= 30,
+      "modal mini map auto-zooms onto the selected incident location (client §29)",
+      JSON.stringify(mapInfo));
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * Client §29 nav removals: the responder dashboard no longer offers Security
+ * and the staff dashboard no longer offers ID verification. Runs last in the
+ * browser section because each role login takes over the shared session.
+ */
+async function roleNavCheck(browser, login, email, roleLabel, expectations) {
+  const page = await browser.newPage();
+  try {
+    await page.setViewport({ width: 1440, height: 900 });
+    await login(page, email);
+    await evalPoll(page,
+      () => document.querySelectorAll(".side-nav button").length > 0,
+      s => s, 15000, 300);
+    const labels = await page.evaluate(() =>
+      [...document.querySelectorAll(".side-nav button")].map(b => (b.textContent ?? "").trim()));
+    for (const [label, shouldExist] of expectations) {
+      record(labels.includes(label) === shouldExist,
+        `${roleLabel} nav ${shouldExist ? "still offers" : "no longer offers"} ${label} (client §29)`,
+        JSON.stringify(labels));
+    }
   } finally {
     await page.close();
   }

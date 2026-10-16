@@ -389,6 +389,50 @@ function MapZoomReset() {
   );
 }
 
+/**
+ * Client §29: the incident map frames the incidents it actually has — on load
+ * (and whenever the plotted set changes) it fits bounds around every incident
+ * marker, falling back to the Pateros default when none exist. The old fixed
+ * center + hard maxBounds clamp could leave an incident outside the view (and
+ * outside the pan limits) entirely.
+ */
+function MapFitReports({ points }: { points: [number, number][] }) {
+  const map = useMap();
+  const key = points.map(point => point.join(",")).join(";");
+  useEffect(() => {
+    if (!key) {
+      map.setView([14.544, 121.071], 14, { animate: false });
+      return;
+    }
+    const coords = key
+      .split(";")
+      .map(pair => pair.split(",").map(Number) as [number, number]);
+    if (coords.length === 1) {
+      map.setView(coords[0], 16, { animate: false });
+      return;
+    }
+    map.fitBounds(coords, { padding: [40, 40], maxZoom: 16, animate: false });
+  }, [map, key]);
+  return null;
+}
+
+/**
+ * Client §29: the incident timeline's mini map sizes itself once the modal has
+ * laid out (a map mounted mid-animation can measure wrong) and re-centres on
+ * the incident's exact location, so the marker is always in view.
+ */
+function IncidentMapFocus({ lat, lng }: { lat: number; lng: number }) {
+  const map = useMap();
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      map.invalidateSize({ pan: false });
+      map.setView([lat, lng], 15, { animate: false });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [map, lat, lng]);
+  return null;
+}
+
 function PaterosMapClick({ onPick }: { onPick: (latitude: number, longitude: number) => void }) {
   useMapEvents({
     click: event => onPick(event.latlng.lat, event.latlng.lng),
@@ -458,13 +502,9 @@ export default function Home() {
   const [evidenceError, setEvidenceError] = useState("");
   const [selectedIncident, setSelectedIncident] = useState<IncidentSummary | null>(null);
   const [selectedIncidentReportId, setSelectedIncidentReportId] = useState<number | null>(null);
-  const [responderNotified, setResponderNotified] = useState(false);
   const [assignTarget, setAssignTarget] = useState(0);
   const isAdmin = user?.role === "admin";
   const isStaff = user?.role === "staff";
-  const notifyResponders = trpc.operations.notifyResponders.useMutation({
-    onSuccess: () => setResponderNotified(true),
-  });
   const { data: responders } = trpc.operations.listResponders.useQuery(undefined, {
     enabled: (isAdmin || isStaff) && Boolean(selectedIncident) && !isStaticSession(),
   });
@@ -792,7 +832,6 @@ export default function Home() {
           { label: "Incident map", icon: MapIcon },
           { label: "Risk reports", icon: AlertTriangle },
           { label: "Alerts", icon: Bell },
-          { label: "Security", icon: ShieldCheck },
         ]
       : user?.role === "staff"
         ? [
@@ -801,7 +840,6 @@ export default function Home() {
             { label: "Evacuees", icon: Users },
             { label: "Resources", icon: Package },
             { label: "Alerts", icon: Bell },
-            { label: "ID verification", icon: ShieldCheck },
           ]
       : [
           { label: "Overview", icon: LayoutDashboard },
@@ -826,8 +864,6 @@ export default function Home() {
     setSelectedIncident(incident);
     setSelectedIncidentReportId(reportId ?? null);
     setAssignTarget(incident.assignedResponderId ?? 0);
-    setResponderNotified(false);
-    notifyResponders.reset();
   }
 
   /**
@@ -859,20 +895,6 @@ export default function Home() {
       },
       report.id
     );
-  }
-
-  function handleNotifyResponders() {
-    if (!selectedIncident || notifyResponders.isPending) return;
-    if (sessionStorage.getItem("likas-static-demo-role")) {
-      setResponderNotified(true);
-      return;
-    }
-    notifyResponders.mutate({
-      incidentId: selectedIncident.id,
-      incidentType: selectedIncident.type,
-      location: selectedIncident.location,
-      priority: selectedIncident.priority as "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
-    });
   }
 
   /** Confirm + save flow for the resolution dialog (spec 4.3/4.4). */
@@ -1935,6 +1957,10 @@ export default function Home() {
                           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                         />
+                        <IncidentMapFocus
+                          lat={Number(incidentTimeline.report.latitude)}
+                          lng={Number(incidentTimeline.report.longitude)}
+                        />
                         <CircleMarker
                           center={[
                             Number(incidentTimeline.report.latitude),
@@ -2119,24 +2145,6 @@ export default function Home() {
                 </Button>
               </div>
             )}
-            {(isAdmin || isStaff) &&
-              (responderNotified ? (
-                <div className="incident-notified" role="status">
-                  <CheckCircle2 size={18} /> Responder / Disaster Team has been
-                  notified.
-                </div>
-              ) : (
-                <Button
-                  onClick={handleNotifyResponders}
-                  disabled={notifyResponders.isPending}
-                >
-                  {notifyResponders.isPending
-                    ? "Notifying responders…"
-                    : "Notify responder / disaster team"}
-                  <Bell size={17} />
-                </Button>
-              ))}
-            {notifyResponders.error && <p className="login-error" role="alert">{notifyResponders.error.message}</p>}
               </div>
             </div>
             {resolutionDialog && (
@@ -2643,8 +2651,8 @@ function WorkspaceView({
   const [demoSearch, setDemoSearch] = useState("");
   const allowedWorkspaces: Record<string, string[]> = {
     admin: ["Evacuation centers", "Evacuees", "Resources", "Incident map", "Risk reports", "Alerts", "Safety advice", "ID verification", "Activity log", "Settings", "User & roles"],
-    staff: ["Overview", "Evacuation centers", "Evacuees", "Resources", "Alerts", "ID verification"],
-    responder: ["Overview", "Incident map", "Risk reports", "Alerts", "Security"],
+    staff: ["Overview", "Evacuation centers", "Evacuees", "Resources", "Alerts"],
+    responder: ["Overview", "Incident map", "Risk reports", "Alerts"],
   };
   const inviteMutation = trpc.admin.createInvitation.useMutation({
     onSuccess: () => {
@@ -3984,9 +3992,10 @@ function WorkspaceView({
         </div>
         <div className="responder-map-layout">
           <div className="responder-map-frame">
-            <MapContainer center={[14.544, 121.071]} zoom={14} minZoom={13} maxZoom={18} maxBounds={[[14.53, 121.05], [14.56, 121.09]]} maxBoundsViscosity={1} scrollWheelZoom className="responder-map">
+            <MapContainer center={[14.544, 121.071]} zoom={14} minZoom={13} maxZoom={18} scrollWheelZoom className="responder-map">
               <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
               <MapZoomReset />
+              <MapFitReports points={(activeIncidentReports ?? []).filter(report => report.latitude != null && report.longitude != null).map(report => [Number(report.latitude), Number(report.longitude)])} />
               {(activeIncidentReports ?? []).filter(report => report.latitude != null && report.longitude != null).map(report => (
                 <CircleMarker key={report.id} center={[Number(report.latitude), Number(report.longitude)]} radius={11} pathOptions={{ color: "#a63f38", fillColor: "#ef8b82", fillOpacity: 0.95 }}>
                   <Popup>
@@ -4001,8 +4010,6 @@ function WorkspaceView({
           </div>
           <div className="responder-incident-list">
             {(activeIncidentReports ?? []).map(report => {
-              // Client §26: exactly two review actions — Resolve and Reject —
-              // and they stop working once the report is closed.
               return (
               <article className="responder-incident-item" key={report.id}>
                 <div><strong>{report.reportCode}</strong><span>{getRiskReportHeadline(report)}</span></div>
