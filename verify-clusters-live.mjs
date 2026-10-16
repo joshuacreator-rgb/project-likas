@@ -17,6 +17,11 @@
 //   - 5.29: the demo-accounts list is alphabetized (Alpha probe before Zulu).
 //   - 3.7: listResponders flags the assigned responder busy while the incident
 //     is open, and free again after it resolves.
+//   - 2.2: every metric card is a real <button>, and the Active incidents card
+//     drills into the Risk reports list with the ACTIVE filter applied (2.4).
+//   - 2.7: two cold tabs with request interception prove the metric-card
+//     skeleton → error banner → Retry recovery, and the Risk reports list's
+//     loading → error+Retry → recovery sequence.
 //   - 1.8 + 3.4: a headless two-tab browser run — a dashboard tab is kicked to
 //     /login the moment a second tab signs in, and the responder queue shows
 //     the sort control plus the NEW badge on the unreviewed report.
@@ -337,12 +342,164 @@ async function browserKickCheck() {
     record(Boolean(queueInfo?.sort), "responder queue exposes the sort control (3.4)");
     record((queueInfo?.unreviewed ?? 0) >= 1 && queueInfo?.badge === "NEW",
       "unreviewed incident highlighted with a NEW badge (3.4)", `rows=${queueInfo?.unreviewed} badge=${queueInfo?.badge}`);
+
+    // Spec 2.2: every metric card on the Overview must be a real button, and
+    // the "Active incidents" card must drill into a filtered Risk reports list.
+    const cardInfo = await page2.evaluate(() => {
+      const cards = [...document.querySelectorAll(".metric-grid .metric-card")];
+      return { total: cards.length, buttons: cards.filter(c => c.tagName === "BUTTON").length };
+    }).catch(() => null);
+    record((cardInfo?.buttons ?? 0) >= 12 && cardInfo?.buttons === cardInfo?.total,
+      "every metric card is a clickable button (2.2)", `buttons=${cardInfo?.buttons}/${cardInfo?.total}`);
+    const clickedCard = await page2.evaluate(() => {
+      const card = [...document.querySelectorAll(".metric-grid .metric-card")]
+        .find(c => c.tagName === "BUTTON" && /Active incidents/.test(c.textContent ?? ""));
+      card?.click();
+      return Boolean(card);
+    }).catch(() => false);
+    record(Boolean(clickedCard), "active-incidents metric card clicked (2.2)");
+    const drillInfo = await (async () => {
+      const deadline = Date.now() + 15000;
+      let last = null;
+      while (Date.now() < deadline) {
+        last = await page2.evaluate(() => ({
+          chip: [...document.querySelectorAll(".workspace-view .empty-copy")].map(n => n.textContent ?? "").join(" | "),
+          items: document.querySelectorAll(".responder-incident-item").length,
+          unreviewed: document.querySelectorAll(".responder-incident-item.unreviewed").length,
+          badge: Boolean(document.querySelector(".responder-incident-item .incident-new-badge")),
+        })).catch(() => null);
+        if (last && /Filtered by active incidents/.test(last.chip) && last.items >= 1) return last;
+        await new Promise(r => setTimeout(r, 500));
+      }
+      return last;
+    })();
+    record(/Filtered by active incidents/.test(drillInfo?.chip ?? "") && (drillInfo?.items ?? 0) >= 1,
+      "card drills into Risk reports with the ACTIVE filter applied (2.2/2.4)",
+      `chip=${JSON.stringify(drillInfo?.chip)} items=${drillInfo?.items}`);
+    record((drillInfo?.unreviewed ?? 0) >= 1 && Boolean(drillInfo?.badge),
+      "Risk reports list highlights the unreviewed report with NEW (3.4)", `rows=${drillInfo?.unreviewed}`);
+
+    // Specs 2.7: two cold tabs with request interception — one blocks the
+    // summary query (metric skeleton → error banner → Retry recovery), the
+    // other blocks the reports query (list loading → error+Retry → recovery).
+    try {
+      await metricStatesCheck(browser, login);
+      await reportListStatesCheck(browser, login);
+    } catch (e) {
+      record(false, "metric/report state browser check failed", String(e).slice(0, 220));
+    }
   } catch (e) {
     // A browser problem must not abort the run before finish() cleans up.
     record(false, "cross-tab kick browser check failed", String(e).slice(0, 220));
   } finally {
     if (browser) await browser.close();
     rmSync(profile, { recursive: true, force: true });
+  }
+}
+
+/** Small Node-side DOM poller: evaluate `fn` in the page until `done(last)`. */
+async function evalPoll(page, fn, done, timeoutMs, intervalMs = 400) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await page.evaluate(fn).catch(() => null);
+    if (last && done(last)) return last;
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  return last;
+}
+
+/**
+ * Spec 2.7 (metric cards): a cold tab where operations.summary is blocked must
+ * show the skeleton first, then the error state (— values + Retry banner),
+ * and after unblocking + clicking Retry the banner must clear and values return.
+ */
+async function metricStatesCheck(browser, login) {
+  const page = await browser.newPage();
+  let blockSummary = true;
+  await page.setRequestInterception(true);
+  page.on("request", req => {
+    if (blockSummary && /operations\.summary/.test(req.url())) req.abort().catch(() => {});
+    else req.continue().catch(() => {});
+  });
+  try {
+    await login(page, RESPONDER_EMAIL); // kicks earlier tabs — their checks are done
+    const skeleton = await evalPoll(page,
+      () => Boolean(document.querySelector(".metric-skeleton")),
+      s => s, 12000, 300);
+    record(Boolean(skeleton), "metric cards show a skeleton during first load (2.7)");
+    const metricErr = await evalPoll(page,
+      () => ({
+        banner: Boolean(document.querySelector(".metrics-error")),
+        retry: Boolean(document.querySelector(".metrics-error button")),
+        unavailable: document.querySelectorAll(".metric-card .metric-unavailable").length,
+      }),
+      s => s.banner, 25000, 500);
+    record(Boolean(metricErr?.banner) && Boolean(metricErr?.retry) && (metricErr?.unavailable ?? 0) >= 1,
+      "metric cards show an error state with a Retry banner (2.7)", `unavailable=${metricErr?.unavailable}`);
+    blockSummary = false;
+    await page.evaluate(() => document.querySelector(".metrics-error button")?.click()).catch(() => {});
+    const recovered = await evalPoll(page,
+      () => ({
+        banner: Boolean(document.querySelector(".metrics-error")),
+        sample: document.querySelector(".metric-grid .metric-card strong")?.textContent?.trim() ?? "",
+      }),
+      s => !s.banner && /^[0-9]/.test(s.sample), 20000, 500);
+    record(Boolean(recovered) && !recovered.banner && /^[0-9]/.test(recovered?.sample ?? ""),
+      "Retry clears the metric error banner and values return (2.7)", `sample=${recovered?.sample}`);
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * Spec 2.7 (Risk reports list): a cold tab where operations.reports is blocked
+ * must show the loading state right after opening the workspace, then the
+ * error state with Retry, and recover once unblocked + retried.
+ */
+async function reportListStatesCheck(browser, login) {
+  const page = await browser.newPage();
+  let blockReports = true;
+  await page.setRequestInterception(true);
+  page.on("request", req => {
+    if (blockReports && /operations\.reports/.test(req.url())) req.abort().catch(() => {});
+    else req.continue().catch(() => {});
+  });
+  try {
+    await login(page, RESPONDER_EMAIL);
+    // Open the workspace immediately, while the first fetch is still retrying:
+    // the list must render its loading state rather than an empty desk.
+    await evalPoll(page,
+      () => [...document.querySelectorAll(".side-nav button")].some(b => /Risk reports/.test(b.textContent ?? "")),
+      s => s, 15000, 300);
+    await page.evaluate(() => {
+      const nav = [...document.querySelectorAll(".side-nav button")].find(b => /Risk reports/.test(b.textContent ?? ""));
+      nav?.click();
+    });
+    const listLoading = await evalPoll(page,
+      () => Boolean(document.querySelector(".list-state")) && !document.querySelector(".list-state-error"),
+      s => s, 8000, 250);
+    record(Boolean(listLoading), "Risk reports list shows a loading state (2.7)");
+    const listErr = await evalPoll(page,
+      () => ({
+        error: Boolean(document.querySelector(".list-state-error")),
+        retry: Boolean(document.querySelector(".list-state-error button")),
+      }),
+      s => s.error, 30000, 500);
+    record(Boolean(listErr?.error) && Boolean(listErr?.retry),
+      "Risk reports list shows an error state with Retry (2.7)");
+    blockReports = false;
+    await page.evaluate(() => document.querySelector(".list-state-error button")?.click()).catch(() => {});
+    const listOk = await evalPoll(page,
+      () => ({
+        items: document.querySelectorAll(".responder-incident-item").length,
+        error: Boolean(document.querySelector(".list-state-error")),
+      }),
+      s => s.items >= 1 && !s.error, 20000, 500);
+    record(Boolean(listOk) && listOk.items >= 1 && !listOk.error,
+      "Risk reports list recovers after Retry (2.7)", `items=${listOk?.items}`);
+  } finally {
+    await page.close();
   }
 }
 

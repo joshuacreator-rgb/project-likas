@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import "leaflet/dist/leaflet.css";
 import {
   CircleMarker,
@@ -528,10 +528,15 @@ export default function Home() {
   const [staticCenters, setStaticCenters] = useState<WorkspaceCenter[]>(readStaticCenters);
   const [staticResources, setStaticResources] = useState<WorkspaceResource[]>(readStaticResources);
   const staticSession = isStaticSession();
-  const { data: liveSummary } = trpc.operations.summary.useQuery(undefined, {
+  const { data: liveSummary, isLoading: summaryLoading, isError: summaryFailed, refetch: refetchSummary } = trpc.operations.summary.useQuery(undefined, {
     enabled: Boolean(user),
     refetchInterval: 1500,
   });
+  // Spec 2.7: metric cards must show a skeleton while the first load is in
+  // flight and an explicit error state (with retry) instead of silently
+  // rendering 0. Static demo sessions keep whatever they already show.
+  const metricsFailed = !staticSession && summaryFailed && liveSummary === undefined;
+  const metricsLoading = !staticSession && liveSummary === undefined && !metricsFailed;
   const { data: liveAlerts } = trpc.operations.alerts.useQuery(undefined, {
     enabled: Boolean(user),
     refetchInterval: 1500,
@@ -969,6 +974,18 @@ export default function Home() {
     (a, b) => responderBusyCount(a) - responderBusyCount(b)
   );
   const busyResponderCount = sortedResponders.filter(r => responderBusyCount(r) > 0).length;
+  // Spec 2.7: shared display states for every metric card — skeleton while the
+  // first load runs, an em dash + banner when the query ultimately fails.
+  const metricValue = (value?: number): ReactNode => {
+    if (metricsLoading) return <span className="metric-skeleton" aria-label="Loading metric" />;
+    if (metricsFailed) return <span className="metric-unavailable">—</span>;
+    return value ?? 0;
+  };
+  const metricNote = (node: ReactNode): ReactNode => {
+    if (metricsLoading) return <span className="metric-skeleton metric-skeleton-note" aria-hidden="true" />;
+    if (metricsFailed) return <span className="metric-unavailable">metrics unavailable</span>;
+    return node;
+  };
   return (
     <div className={`likas-app internal-shell ${dashboardRole}-shell ${largeText ? "large-text" : ""}`}>
       <RoleOnboarding role={user?.role} />
@@ -1157,107 +1174,127 @@ export default function Home() {
             </div>
           </section>
 
+          {metricsFailed && (
+            <p className="metrics-error" role="alert">
+              Couldn’t load dashboard metrics.{" "}
+              <button
+                type="button"
+                className="incident-timeline-button"
+                onClick={() => void refetchSummary()}
+              >
+                Retry
+              </button>
+            </p>
+          )}
           <section className="metric-grid">
-            <div className="metric-card accent">
+            <button type="button" className="metric-card accent" onClick={() => setActive("Evacuation centers")}>
               <div className="metric-icon">
                 <Building2 size={18} />
               </div>
               <span>Evacuation centers</span>
-              <strong>{liveSummary?.centers ?? 0}</strong>
+              <strong>{metricValue(liveSummary?.centers)}</strong>
               <small>
-                <b>{liveCenters?.filter(c => c.status === "OPEN").length ?? 0} open</b>
-                {" · "}
-                {liveSummary?.availableSlots ?? 0} slots free
+                {metricNote(<>
+                  <b>{liveCenters?.filter(c => c.status === "OPEN").length ?? 0} open</b>
+                  {" · "}
+                  {liveSummary?.availableSlots ?? 0} slots free
+                </>)}
               </small>
-            </div>
-            <div className="metric-card">
+            </button>
+            <button type="button" className="metric-card" onClick={() => { setEvacueeStatusFilter("ALL"); setActive("Evacuees"); }}>
               <div className="metric-icon blue">
                 <Users size={18} />
               </div>
               <span>Registered evacuees</span>
-              <strong>{liveSummary?.evacuees ?? 0}</strong>
+              <strong>{metricValue(liveSummary?.evacuees)}</strong>
               <small>
-                <b>{liveSummary?.occupancy ?? 0} occupying</b>
-                {" · "}
-                {liveSummary?.capacity ?? 0} total capacity
+                {metricNote(<>
+                  <b>{liveSummary?.occupancy ?? 0} occupying</b>
+                  {" · "}
+                  {liveSummary?.capacity ?? 0} total capacity
+                </>)}
               </small>
-            </div>
-            <div className="metric-card">
+            </button>
+            <button type="button" className="metric-card" onClick={() => setActive("Resources")}>
               <div className="metric-icon amber">
                 <Package size={18} />
               </div>
               <span>Available resources</span>
-              <strong>{liveSummary?.resources ?? 0}</strong>
+              <strong>{metricValue(liveSummary?.resources)}</strong>
               <small>
-                <b className={belowMinimumResources > 0 ? "warning" : ""}>
-                  {belowMinimumResources} items
-                </b>{" "}
-                below minimum
+                {metricNote(<>
+                  <b className={belowMinimumResources > 0 ? "warning" : ""}>
+                    {belowMinimumResources} items
+                  </b>{" "}
+                  below minimum
+                </>)}
               </small>
-            </div>
-            <div className="metric-card">
+            </button>
+            <button type="button" className="metric-card" onClick={() => { setIncidentStatusFilter("ACTIVE"); setActive("Risk reports"); }}>
               <div className="metric-icon rose">
                 <AlertTriangle size={18} />
               </div>
               <span>Active incidents</span>
-              <strong>{activeOverviewIncidents.length}</strong>
+              <strong>{metricValue(activeOverviewIncidents.length)}</strong>
               <small>
-                <b className={criticalIncidentCount > 0 ? "critical" : ""}>
-                  {criticalIncidentCount} critical
-                </b>
-                {" · "}
-                {unassignedIncidentCount} unassigned
+                {metricNote(<>
+                  <b className={criticalIncidentCount > 0 ? "critical" : ""}>
+                    {criticalIncidentCount} critical
+                  </b>
+                  {" · "}
+                  {unassignedIncidentCount} unassigned
+                </>)}
               </small>
-            </div>
+            </button>
           </section>
 
           <section className="metric-grid">
             <button type="button" className="metric-card" onClick={() => { setIncidentStatusFilter("ALL"); setActive("Risk reports"); }}>
               <div className="metric-icon blue"><AlertTriangle size={18} /></div>
               <span>Total incidents</span>
-              <strong>{liveSummary?.totalReports ?? 0}</strong>
+              <strong>{metricValue(liveSummary?.totalReports)}</strong>
               <small>View all reports</small>
             </button>
             <button type="button" className="metric-card" onClick={() => { setIncidentStatusFilter("PENDING"); setActive("Risk reports"); }}>
               <div className="metric-icon amber"><AlertTriangle size={18} /></div>
               <span>Pending incidents</span>
-              <strong>{liveSummary?.pendingIncidents ?? 0}</strong>
+              <strong>{metricValue(liveSummary?.pendingIncidents)}</strong>
               <small>Needs review</small>
             </button>
             <button type="button" className="metric-card" onClick={() => { setIncidentStatusFilter("IN_PROGRESS"); setActive("Risk reports"); }}>
               <div className="metric-icon blue"><AlertTriangle size={18} /></div>
               <span>In progress incidents</span>
-              <strong>{liveSummary?.inProgressIncidents ?? 0}</strong>
+              <strong>{metricValue(liveSummary?.inProgressIncidents)}</strong>
               <small>Active response</small>
             </button>
             <button type="button" className="metric-card" onClick={() => { setIncidentStatusFilter("RESOLVED"); setActive("Risk reports"); }}>
               <div className="metric-icon teal"><CheckCircle2 size={18} /></div>
               <span>Resolved incidents</span>
-              <strong>{liveSummary?.resolvedIncidents ?? 0}</strong>
+              <strong>{metricValue(liveSummary?.resolvedIncidents)}</strong>
               <small>Completed</small>
             </button>
             <button type="button" className="metric-card" onClick={() => { setIncidentStatusFilter("REJECTED"); setActive("Risk reports"); }}>
               <div className="metric-icon rose"><XCircle size={18} /></div>
               <span>Rejected incidents</span>
-              <strong>{liveSummary?.rejectedIncidents ?? 0}</strong>
+              <strong>{metricValue(liveSummary?.rejectedIncidents)}</strong>
               <small>Closed invalid</small>
             </button>
             <button type="button" className="metric-card" onClick={() => { setEvacueeStatusFilter("ALL"); setActive("Evacuees"); }}>
               <div className="metric-icon teal"><Users size={18} /></div>
               <span>Registered evacuees</span>
-              <strong>{liveSummary?.evacuees ?? 0}</strong>
+              <strong>{metricValue(liveSummary?.evacuees)}</strong>
               <small>People in the registry</small>
             </button>
             <button type="button" className="metric-card" onClick={() => { setEvacueeStatusFilter("ALL"); setActive("Evacuees"); }}>
               <div className="metric-icon blue"><Users size={18} /></div>
               <span>Total households</span>
-              <strong>{liveSummary?.households ?? 0}</strong>
+              <strong>{metricValue(liveSummary?.households)}</strong>
               <small>Distinct households registered</small>
             </button>
             <button type="button" className="metric-card" onClick={() => { setEvacueeStatusFilter("PENDING"); setActive("Evacuees"); }}>
               <div className="metric-icon amber"><Users size={18} /></div>
               <span>Pending placement</span>
-              <strong>{liveSummary?.pendingEvacuees ?? 0}</strong>
+              <strong>{metricValue(liveSummary?.pendingEvacuees)}</strong>
               <small>Awaiting a center</small>
             </button>
           </section>
@@ -2458,7 +2495,7 @@ function WorkspaceView({
   const { data: invitations } = trpc.admin.invitations.useQuery(undefined, {
     enabled: active === "User & roles",
   });
-  const { data: liveReports } = trpc.operations.reports.useQuery(undefined, {
+  const { data: liveReports, isLoading: reportsLoading, isError: reportsFailed, refetch: refetchReports } = trpc.operations.reports.useQuery(undefined, {
     enabled: Boolean(user),
     refetchInterval: 1500,
     refetchOnWindowFocus: true,
@@ -3966,10 +4003,25 @@ function WorkspaceView({
   }
   if (active === "Risk reports") {
     const allReports = isStaticSession() ? staticReports : (liveReports ?? []);
-    const filteredReports = allReports.filter(report =>
-      (incidentStatusFilter === "ALL" || report.status === incidentStatusFilter) &&
-      (!normalizedSearch || `${report.reportCode} ${report.reportType} ${report.location} ${report.status} ${report.priority}`.toLowerCase().includes(normalizedSearch))
-    );
+    // Spec 2.7: the live list distinguishes "still loading" and "failed to
+    // load" (with a retry) from a genuinely empty desk, instead of showing
+    // "No incident reports found." for all three.
+    const reportsListFailed = !isStaticSession() && liveReports === undefined && reportsFailed;
+    const reportsListLoading = !isStaticSession() && liveReports === undefined && !reportsFailed;
+    const filteredReports = allReports.filter(report => {
+      // Spec 2.2/2.4: the "Active incidents" card drills in with the ACTIVE
+      // filter — the same definition the dashboard card counts by
+      // (everything that is not yet RESOLVED).
+      const statusMatch =
+        incidentStatusFilter === "ALL" ||
+        (incidentStatusFilter === "ACTIVE"
+          ? report.status !== "RESOLVED"
+          : report.status === incidentStatusFilter);
+      return (
+        statusMatch &&
+        (!normalizedSearch || `${report.reportCode} ${report.reportType} ${report.location} ${report.status} ${report.priority}`.toLowerCase().includes(normalizedSearch))
+      );
+    });
     const priorityColor = (p: string) => p === "CRITICAL" ? "rose" : p === "HIGH" ? "amber" : p === "MEDIUM" ? "blue" : "teal";
     return (
       <section className="workspace-view panel responder-incident-map">
@@ -3978,16 +4030,29 @@ function WorkspaceView({
             <span className="eyebrow">REPORTS DESK</span>
             <h2>Incident reports</h2>
             <p>All submitted risk and emergency reports. Review, update status, and coordinate response.</p>
-            {incidentStatusFilter !== "ALL" && <p className="empty-copy">Filtered by {incidentStatusFilter.replace(/_/g, " ")}. <button type="button" className="incident-timeline-button" onClick={() => setIncidentStatusFilter("ALL")}>Clear filter</button></p>}
+            {incidentStatusFilter !== "ALL" && <p className="empty-copy">Filtered by {incidentStatusFilter === "ACTIVE" ? "active incidents" : incidentStatusFilter.replace(/_/g, " ")}. <button type="button" className="incident-timeline-button" onClick={() => setIncidentStatusFilter("ALL")}>Clear filter</button></p>}
           </div>
         </div>
         {updateRiskReportMutation.error && <p className="login-error" role="alert">{updateRiskReportMutation.error.message}</p>}
+        {reportsListFailed ? (
+          <div className="list-state list-state-error" role="alert">
+            <span>Couldn’t load risk reports from the server.</span>
+            <Button variant="outline" onClick={() => void refetchReports()}>Retry</Button>
+          </div>
+        ) : reportsListLoading ? (
+          <div className="list-state" role="status" aria-live="polite">
+            <span className="list-state-spinner" aria-hidden="true" /> Loading risk reports…
+          </div>
+        ) : (
         <div className="responder-incident-list" style={{ maxHeight: "none", padding: "1rem" }}>
           {filteredReports.length === 0 && <p className="empty-copy">No incident reports found.</p>}
           {filteredReports.map(report => (
-            <article className="responder-incident-item" key={report.id}>
+            <article className={`responder-incident-item${report.status === "PENDING" ? " unreviewed" : ""}`} key={report.id}>
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                 <strong>{report.reportCode}</strong>
+                {report.status === "PENDING" && (
+                  <span className="incident-new-badge" title="Unreviewed — no responder has acted on it yet">NEW</span>
+                )}
                 <span>{report.reportType}</span>
                 <span className={`table-status ${priorityColor(report.priority)}`}>{report.priority}</span>
                 <span className={`table-status ${report.status === "RESOLVED" ? "teal" : report.status === "IN_PROGRESS" ? "blue" : report.status === "REJECTED" ? "rose" : "amber"}`}>{report.status}</span>
@@ -4048,6 +4113,7 @@ function WorkspaceView({
             </article>
           ))}
         </div>
+        )}
       </section>
     );
   }
@@ -4087,15 +4153,7 @@ function WorkspaceView({
           </thead>
           <tbody>
             {workspaceRows.map((row, index) => (
-              <tr
-                key={`${active}-${index}`}
-                className={
-                  active === "Risk reports" &&
-                  (filteredLiveReports ?? [])[index]?.status === "PENDING"
-                    ? "unreviewed-row"
-                    : undefined
-                }
-              >
+              <tr key={`${active}-${index}`}>
                 {row.map((cell, cellIndex) => (
                   <td key={cell}>
                     {active === "Alerts" && cellIndex === 0 && alertMessages[index] ? (

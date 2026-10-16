@@ -342,7 +342,21 @@ button { cursor:pointer; }
 .queue-sort{min-height:34px;padding:0 9px;border:1px solid #d8e5e2;border-radius:7px;background:#fff;font:inherit;font-size:13px;font-weight:600;color:#31584f;cursor:pointer}
 .incident-row.unreviewed{background:#f2faf7;border-left:3px solid #177f78;padding-left:9px;border-radius:8px}
 .incident-new-badge{flex:none;padding:2px 7px;border-radius:999px;background:#177f78;color:#fff;font-size:10.5px;font-weight:800;letter-spacing:.06em}
-.workspace-table tbody tr.unreviewed-row{background:#f2faf7;box-shadow:inset 3px 0 0 #177f78}
+
+/* Metric cards — skeleton / error states (spec 2.7) */
+.metric-card{text-align:left;color:inherit}
+.metric-skeleton{display:inline-block;width:2em;height:.85em;border-radius:6px;background:linear-gradient(90deg,#e8efed 25%,#f6f9f8 50%,#e8efed 75%);background-size:200% 100%;animation:metric-shimmer 1.2s ease-in-out infinite;vertical-align:middle}
+.metric-skeleton-note{width:70%;height:.7em}
+.metric-card .metric-unavailable{color:#a4433f}
+@keyframes metric-shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.metrics-error{display:flex;align-items:center;gap:8px;margin:0 0 12px;padding:10px 14px;border:1px solid #f0c9c6;background:#fdf3f2;border-radius:9px;color:#a4433f;font-size:13px;font-weight:600}
+
+/* Risk reports list — loading / error / retry states (spec 2.7) */
+.list-state{display:flex;align-items:center;gap:10px;padding:30px 1rem;color:#5b7d75;font-size:14px;font-weight:600}
+.list-state-error{color:#a4433f}
+.list-state-spinner{width:16px;height:16px;border:2px solid #cfe3df;border-top-color:#177f78;border-radius:50%;animation:list-spin .8s linear infinite;flex:none}
+@keyframes list-spin{to{transform:rotate(360deg)}}
+.responder-incident-item.unreviewed{background:#eef8f4;border-color:#9ed4c6;box-shadow:inset 3px 0 0 #177f78}
 
 /* Assignment dropdown — availability flagging (spec 3.7) */
 .assignment-hint{font-weight:500;color:#5b7d75;font-size:12px}
