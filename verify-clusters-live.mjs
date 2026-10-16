@@ -319,7 +319,7 @@ async function main() {
       "staff without a center assignment cannot register a family (permissions respected)", staffDenied.error ?? "no error");
 
     // …then staff are assigned (over the tunnel) and the real flows run.
-    await db.query("INSERT INTO centerStaff (centerId, userId) VALUES (?, ?)", [familyCenter.id, staffDbId]);
+    await db.query("INSERT INTO center_staff (centerId, userId) VALUES (?, ?)", [familyCenter.id, staffDbId]);
 
     const apiFamily = await trpc("operations.registerFamily", {
       method: "POST", cookie: admin.cookie,
@@ -360,7 +360,9 @@ async function main() {
     const famRows2 = (await trpc("operations.evacuees", { cookie: admin.cookie, input: {} })).value ?? [];
     record(!famRows2.some(r => r.id === childId), "the removed member is gone from the registry list", `id=${childId}`);
     const familyNow = famRows2.filter(r => r.householdId === apiHeadId || r.id === apiHeadId);
-    record(familyNow.length === 1, "the family member count drops immediately after the removal", `family=${familyNow.length}`);
+    const familyBefore = memberRows.length + 1; // members + the head itself
+    record(familyNow.length === familyBefore - 1, "the family member count drops immediately after the removal",
+      `family ${familyBefore} → ${familyNow.length}`);
     const headRemoval = await trpc("operations.removeHouseholdMember", { method: "POST", cookie: admin.cookie, input: { evacueeId: apiHeadId } });
     record(Boolean(headRemoval.error) && /head of a household/.test(headRemoval.error ?? ""),
       "removing the household head is refused", headRemoval.error ?? "no error");
@@ -696,7 +698,7 @@ async function familyManagementCheck(browser, login) {
       const deadline = Date.now() + 12000;
       while (Date.now() < deadline) {
         const ok = await page.evaluate(() => {
-          const row = [...document.querySelectorAll(".workspace-user-table tbody tr")].find(tr => new RegExp(API_FAMILY).test(tr.textContent ?? ""));
+          const row = [...document.querySelectorAll(".workspace-user-table tbody tr")].find(tr => (tr.textContent ?? "").includes("Clusterapifamily"));
           const btn = row ? [...row.querySelectorAll("button")].find(b => (b.textContent ?? "").trim() === "Manage Your Family") : null;
           btn?.click();
           return Boolean(btn);
@@ -841,7 +843,7 @@ async function familyManagementCheck(browser, login) {
     const saved = await evalPoll(page,
       () => ({
         closed: !document.querySelector("form.family-modal"),
-        row: [...document.querySelectorAll(".workspace-user-table tbody tr")].some(tr => new RegExp(UI_FAMILY).test(tr.textContent ?? "")),
+        row: [...document.querySelectorAll(".workspace-user-table tbody tr")].some(tr => (tr.textContent ?? "").includes("Clusteruifamily")),
       }),
       s => s.closed && s.row, 25000, 600);
     record(Boolean(saved?.closed) && Boolean(saved?.row),
@@ -852,7 +854,7 @@ async function familyManagementCheck(browser, login) {
       const deadline = Date.now() + 10000;
       while (Date.now() < deadline) {
         const ok = await page.evaluate(() => {
-          const row = [...document.querySelectorAll(".workspace-user-table tbody tr")].find(tr => new RegExp(UI_FAMILY).test(tr.textContent ?? ""));
+          const row = [...document.querySelectorAll(".workspace-user-table tbody tr")].find(tr => (tr.textContent ?? "").includes("Clusteruifamily"));
           const btn = row ? [...row.querySelectorAll("button")].find(b => (b.textContent ?? "").trim() === "Manage Your Family") : null;
           btn?.click();
           return Boolean(btn);
@@ -942,8 +944,8 @@ async function finish(db, flow, provisioned, extraEmails = []) {
         const perCenter = new Map();
         for (const row of rows) perCenter.set(row.centerId, (perCenter.get(row.centerId) ?? 0) + 1);
         for (const [centerId, n] of perCenter) {
-          await db.query("UPDATE evacuationCenters SET currentOccupancy = GREATEST(currentOccupancy - ?, 0) WHERE id = ?", [n, centerId]);
-          await db.query("UPDATE evacuationCenters SET status = CASE WHEN status = 'FULL' AND currentOccupancy < maximumCapacity THEN 'OPEN' ELSE status END WHERE id = ?", [centerId]);
+          await db.query("UPDATE evacuation_centers SET currentOccupancy = GREATEST(currentOccupancy - ?, 0) WHERE id = ?", [n, centerId]);
+          await db.query("UPDATE evacuation_centers SET status = CASE WHEN status = 'FULL' AND currentOccupancy < maximumCapacity THEN 'OPEN' ELSE status END WHERE id = ?", [centerId]);
         }
         const [res] = await db.query(`DELETE FROM evacuees WHERE ${predicate}`, params);
         console.log(`    cleanup ok: e2e family households (${headIds.length} heads, ${res.affectedRows} rows, slots given back)`);
@@ -963,7 +965,7 @@ async function finish(db, flow, provisioned, extraEmails = []) {
     const accountCleanup = [
       [`DELETE FROM auth_credentials WHERE email IN (${emails.map(() => "?").join(",")})`, emails],
       // The §27 staff center assignment must go before the user row it references.
-      [`DELETE FROM centerStaff WHERE userId IN (${userIds.map(() => "?").join(",") || "NULL"})`, userIds],
+      [`DELETE FROM center_staff WHERE userId IN (${userIds.map(() => "?").join(",") || "NULL"})`, userIds],
       [`DELETE FROM evacuees WHERE userId IN (${userIds.map(() => "?").join(",") || "NULL"})`, userIds],
       [`DELETE FROM users WHERE email IN (${emails.map(() => "?").join(",")})`, emails],
     ];
