@@ -116,10 +116,10 @@ export const HARDCODED_NEWS_VIDEOS: readonly NewsVideo[] = [
     publishedAt: ago(1_440),
   },
   {
-    id: "fallback-video-untv-prepare",
-    videoId: "KDZ_AfZ1hWA",
-    title: "How to prepare for a typhoon",
-    channel: "UNTV News",
+    id: "fallback-video-abs-cbn-nando",
+    videoId: "YpHz1GAHkEI",
+    title: "PAGASA: Paalala sa paghahanda sa bagyo (Super Typhoon Nando)",
+    channel: "ABS-CBN News / DOST-PAGASA",
     publishedAt: ago(2_880),
   },
   {
