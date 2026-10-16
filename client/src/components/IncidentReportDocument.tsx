@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Printer, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { IncidentSummary } from "@/pages/Home";
@@ -79,19 +79,31 @@ export default function IncidentReportDocument({ incident, detail, actions, atta
     window.print();
   };
 
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="report-document" onClick={(e) => e.stopPropagation()}>
-        <div className="report-document-toolbar no-print">
-          <Button type="button" onClick={handlePrint}>
-            <Printer size={15} /> Print / Save as PDF
-          </Button>
-          <Button type="button" variant="outline" onClick={onClose}>
-            <X size={15} /> Close
-          </Button>
-        </div>
+  // Client §28: clicking "Print incident" must pop the print dialog up on
+  // screen right away, so print once the preview has painted. The toolbar
+  // button stays as the manual retry (e.g. after cancelling the dialog).
+  useEffect(() => {
+    const timer = window.setTimeout(() => window.print(), 400);
+    return () => window.clearTimeout(timer);
+  }, []);
 
-        <div className="report-page" ref={pageRef}>
+  return (
+    // NOTE: this overlay used to be wrapped in a `.modal-backdrop` div. That
+    // trapped the z-300 print preview inside a z-100 stacking context, so the
+    // still-open Incident Details modal (also `.modal-backdrop`, later in the
+    // DOM) painted on top and blocked it — and `@media print` hid the wrapper,
+    // making the printout blank. The overlay styles its own backdrop now.
+    <div className="report-document" onClick={onClose}>
+      <div className="report-document-toolbar no-print" onClick={(e) => e.stopPropagation()}>
+        <Button type="button" onClick={handlePrint}>
+          <Printer size={15} /> Print / Save as PDF
+        </Button>
+        <Button type="button" variant="outline" onClick={onClose}>
+          <X size={15} /> Close
+        </Button>
+      </div>
+
+      <div className="report-page" ref={pageRef} onClick={(e) => e.stopPropagation()}>
           <header className="report-header">
             <div>
               <h1>PROJECT LIKAS</h1>
@@ -194,6 +206,5 @@ export default function IncidentReportDocument({ incident, detail, actions, atta
           </footer>
         </div>
       </div>
-    </div>
   );
 }

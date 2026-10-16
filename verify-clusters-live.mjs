@@ -29,8 +29,10 @@
 //     notifications (citizen emergency, assignment, rejection) with the actual
 //     emergency name as the heading and reporter/location/description/time in
 //     the body — one row per event, ended alerts drop off staff too — and the
-//     Risk reports list offers exactly Resolve + Reject (no status dropdown),
-//     both disabled once the report is closed.
+//     Risk reports list has no status dropdown.
+//   - client §28: the Risk reports rows carry no Resolve/Reject buttons either
+//     (review actions live only inside Incident Details), and the print-media
+//     incident report contains the actual report content.
 //
 //   railway connect mysql --tunnel-only -P 3307   (background)
 //   MYSQL_USER=... MYSQL_PASSWORD=... MYSQL_DATABASE=... node verify-clusters-live.mjs
@@ -510,30 +512,27 @@ async function browserKickCheck() {
     record((drillInfo?.unreviewed ?? 0) >= 1 && Boolean(drillInfo?.badge),
       "Risk reports list highlights the unreviewed report with NEW (3.4)", `rows=${drillInfo?.unreviewed}`);
 
-    // Client §26: the Risk reports list shows exactly two review actions —
-    // Resolve and Reject — and no status dropdown. Under the ACTIVE filter the
-    // REJECTED report B and the PENDING report C are both visible: the closed
-    // report's buttons are disabled, the open report's are live.
+    // Client §28: the Risk reports rows no longer carry Resolve/Reject
+    // buttons — review actions live only inside Incident Details (kept from
+    // §26). The old status dropdown must not come back either.
     const reviewInfo = await page2.evaluate(() => {
       const rows = [...document.querySelectorAll("article.responder-incident-item")];
-      const rowWithStatus = status => rows.find(r => [...r.querySelectorAll("span")].some(sp => (sp.textContent ?? "").trim() === status));
-      const buttons = row => row ? ["Resolve", "Reject"].map(label => {
-        const b = [...row.querySelectorAll("button")].find(btn => (btn.textContent ?? "").trim().startsWith(label));
-        return b ? `${label}:${b.disabled ? "disabled" : "enabled"}` : `${label}:missing`;
-      }) : ["row:missing"];
+      const rowActionLabels = rows.flatMap(row =>
+        [...row.querySelectorAll("button")].map(b => (b.textContent ?? "").trim())
+      );
       return {
+        rows: rows.length,
         statusSelects: document.querySelectorAll('select[aria-label="Update report status"]').length,
-        closed: buttons(rowWithStatus("REJECTED")),
-        open: buttons(rowWithStatus("PENDING")),
+        reviewButtons: rowActionLabels.filter(t => /^(Resolve|Reject)/.test(t)).length,
       };
     }).catch(() => null);
     record((reviewInfo?.statusSelects ?? -1) === 0,
-      "Risk reports list has no status dropdown — Resolve and Reject buttons only (client §26)",
-      `selects=${reviewInfo?.statusSelects}`);
-    record(JSON.stringify(reviewInfo?.closed) === JSON.stringify(["Resolve:disabled", "Reject:disabled"]),
-      "closed (REJECTED) report shows both review buttons disabled (client §26)", JSON.stringify(reviewInfo?.closed));
-    record(JSON.stringify(reviewInfo?.open) === JSON.stringify(["Resolve:enabled", "Reject:enabled"]),
-      "open (PENDING) report shows both review buttons enabled (client §26)", JSON.stringify(reviewInfo?.open));
+      "Risk reports list has no status dropdown (client §26)", `selects=${reviewInfo?.statusSelects}`);
+    record((reviewInfo?.reviewButtons ?? -1) === 0,
+      "Risk reports rows carry no Resolve/Reject buttons — review stays in Incident Details (client §28)",
+      `rowActionButtons=${reviewInfo?.reviewButtons}`);
+    record((reviewInfo?.rows ?? 0) >= 1,
+      "Risk reports list still renders the filtered incident rows", `rows=${reviewInfo?.rows}`);
 
     // Specs 2.7: two cold tabs with request interception — one blocks the
     // summary query (metric skeleton → error banner → Retry recovery), the
@@ -548,6 +547,11 @@ async function browserKickCheck() {
       await familyManagementCheck(browser, login);
     } catch (e) {
       record(false, "family management browser check failed", String(e).slice(0, 220));
+    }
+    try {
+      await incidentPrintCheck(browser, login);
+    } catch (e) {
+      record(false, "incident print browser check failed", String(e).slice(0, 220));
     }
   } catch (e) {
     // A browser problem must not abort the run before finish() cleans up.
@@ -877,6 +881,87 @@ async function familyManagementCheck(browser, login) {
     record(Boolean(reopened) && newFamilyInfo?.count === "2" && new RegExp(UI_FAMILY).test(newFamilyInfo?.rows ?? ""),
       "the saved family opens as its OWN household with head + member (client §27)",
       `count=${newFamilyInfo?.count} rows=${JSON.stringify((newFamilyInfo?.rows ?? "").slice(0, 150))}`);
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * Client §28: the print preview must pop up ABOVE the still-open Incident
+ * Details modal (it used to be trapped behind it in a z-100 wrapper), the
+ * browser print dialog must open by itself, and the printed page must contain
+ * the report itself (the old print CSS hid the whole app — including the
+ * report rendered inside it — blanking the printout).
+ */
+async function incidentPrintCheck(browser, login) {
+  const page = await browser.newPage();
+  try {
+    await login(page, ADMIN_EMAIL);
+    await evalPoll(page,
+      () => [...document.querySelectorAll(".side-nav button")].some(b => /Risk reports/.test(b.textContent ?? "")),
+      s => s, 15000, 300);
+    await page.evaluate(() => {
+      const got = [...document.querySelectorAll("button")].find(b => /Got it/i.test(b.textContent ?? ""));
+      got?.click();
+      const nav = [...document.querySelectorAll(".side-nav button")].find(b => /Risk reports/.test(b.textContent ?? ""));
+      nav?.click();
+    });
+    await evalPoll(page,
+      () => Boolean(document.querySelector(".responder-incident-item .incident-timeline-button")),
+      s => s, 20000, 400);
+
+    const opened = await page.evaluate(() => {
+      const btn = [...document.querySelectorAll(".responder-incident-item .incident-timeline-button")][0];
+      btn?.click();
+      return Boolean(btn);
+    });
+    record(Boolean(opened), "Risk reports row opens the Incident Details modal");
+    await page.waitForSelector(".incident-detail-modal", { timeout: 15000 });
+
+    const geo = await evalPoll(page,
+      () => {
+        const modal = document.querySelector(".incident-detail-modal");
+        return modal ? { width: Math.round(modal.getBoundingClientRect().width) } : null;
+      },
+      s => Boolean(s), 8000, 300);
+    record((geo?.width ?? 0) >= 800, "Incident Details modal renders at full working width (client §28)", `width=${geo?.width}`);
+
+    // Stub window.print so the auto-print is observable without a real dialog.
+    await page.evaluate(() => {
+      window.__printCalls = 0;
+      window.print = () => { window.__printCalls += 1; };
+    });
+    await page.evaluate(() => {
+      const btn = [...document.querySelectorAll(".incident-timeline-head button")].find(b => /Print incident/.test(b.textContent ?? ""));
+      btn?.click();
+    });
+    await page.waitForSelector(".report-document", { timeout: 15000 });
+
+    const onTop = await page.evaluate(() => {
+      const el = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+      return Boolean(el && el.closest(".report-document"));
+    });
+    record(onTop, "print preview pops up ABOVE the Incident Details modal (client §28)");
+
+    const printed = await evalPoll(page,
+      () => ({ calls: window.__printCalls ?? 0 }),
+      s => s.calls >= 1, 8000, 300);
+    record((printed?.calls ?? 0) >= 1, "print preview opens the browser print dialog by itself (client §28)", `calls=${printed?.calls}`);
+
+    await page.emulateMediaType("print");
+    await new Promise(r => setTimeout(r, 400));
+    const printState = await page.evaluate(() => {
+      const pageEl = document.querySelector(".report-page");
+      const cs = pageEl ? getComputedStyle(pageEl) : null;
+      return {
+        visible: cs ? cs.visibility === "visible" && cs.display !== "none" : false,
+        hasReport: /PROJECT LIKAS/i.test(document.body.innerText ?? ""),
+      };
+    });
+    record(Boolean(printState?.visible) && Boolean(printState?.hasReport),
+      "printed page contains the actual incident report, not a blank sheet (client §28)",
+      JSON.stringify(printState));
+    await page.emulateMediaType(null);
   } finally {
     await page.close();
   }

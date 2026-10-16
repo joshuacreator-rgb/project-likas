@@ -2562,13 +2562,6 @@ function WorkspaceView({
    * Spec 4.3/4.4: resolving and rejecting are two-step actions — a
    * confirmation dialog first, with optional remarks saved to the report.
    */
-  function requestResolution(
-    mode: "RESOLVED" | "REJECTED",
-    reportId: number,
-    reportLabel: string
-  ) {
-    setResolutionDialog({ mode, reportId, reportLabel, remarks: "" });
-  }
   function submitResolution(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!resolutionDialog) return;
@@ -4010,7 +4003,6 @@ function WorkspaceView({
             {(activeIncidentReports ?? []).map(report => {
               // Client §26: exactly two review actions — Resolve and Reject —
               // and they stop working once the report is closed.
-              const isClosed = report.status === "RESOLVED" || report.status === "REJECTED";
               return (
               <article className="responder-incident-item" key={report.id}>
                 <div><strong>{report.reportCode}</strong><span>{getRiskReportHeadline(report)}</span></div>
@@ -4018,12 +4010,6 @@ function WorkspaceView({
                 <button type="button" className="incident-timeline-button" onClick={() => onOpenIncident?.({ id: report.reportCode, type: getRiskReportHeadline(report), location: report.location, priority: report.priority, time: "Live report", color: report.priority === "CRITICAL" ? "rose" : report.priority === "HIGH" ? "amber" : "blue", reportId: report.id, status: report.status, createdAt: report.createdAt, resolution: report.resolution, assignedResponderId: report.assignedResponderId ?? null }, report.id)}>View incident timeline <ChevronRight size={14} /></button>
                 <div className="responder-incident-actions">
                   {report.latitude != null && report.longitude != null ? <a href={`https://www.google.com/maps/dir/?api=1&destination=${report.latitude},${report.longitude}`} target="_blank" rel="noreferrer"><MapPin size={14} /> Go there</a> : <small>Exact coordinates are not available for this report.</small>}
-                  {(user?.role === "responder" || user?.role === "admin") && (
-                    <>
-                      <Button type="button" variant="outline" onClick={() => requestResolution("RESOLVED", report.id, report.reportCode)} disabled={isClosed || updateRiskReportMutation.isPending}><CheckCircle2 size={14} /> Resolve</Button>
-                      <Button type="button" variant="outline" onClick={() => requestResolution("REJECTED", report.id, report.reportCode)} disabled={isClosed || updateRiskReportMutation.isPending}><XCircle size={14} /> Reject</Button>
-                    </>
-                  )}
                 </div>
               </article>
               );
@@ -4230,9 +4216,6 @@ function WorkspaceView({
         <div className="responder-incident-list" style={{ maxHeight: "none", padding: "1rem" }}>
           {filteredReports.length === 0 && <p className="empty-copy">No incident reports found.</p>}
           {filteredReports.map(report => {
-            // Client §26: exactly two review actions, no dropdown — and both
-            // are disabled once the report is resolved or rejected.
-            const isClosed = report.status === "RESOLVED" || report.status === "REJECTED";
             return (
             <article className={`responder-incident-item${report.status === "PENDING" ? " unreviewed" : ""}`} key={report.id}>
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
@@ -4266,16 +4249,6 @@ function WorkspaceView({
                 {report.latitude != null && report.longitude != null
                   ? <a href={`https://www.google.com/maps/dir/?api=1&destination=${report.latitude},${report.longitude}`} target="_blank" rel="noreferrer"><MapPin size={14} /> Go there</a>
                   : <small>No coordinates on this report.</small>}
-                {(user?.role === "responder" || user?.role === "admin") && (
-                  <>
-                    <Button type="button" onClick={() => requestResolution("RESOLVED", report.id, report.reportCode)} disabled={isClosed || updateRiskReportMutation.isPending}>
-                      <CheckCircle2 size={14} /> Resolve
-                    </Button>
-                    <Button type="button" variant="outline" onClick={() => requestResolution("REJECTED", report.id, report.reportCode)} disabled={isClosed || updateRiskReportMutation.isPending}>
-                      <XCircle size={14} /> Reject
-                    </Button>
-                  </>
-                )}
               </div>
             </article>
             );
