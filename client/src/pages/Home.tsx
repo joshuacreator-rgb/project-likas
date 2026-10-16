@@ -2355,6 +2355,19 @@ function WorkspaceView({
   const [registrySearch, setRegistrySearch] = useState("");
   const [householdNewMemberOpen, setHouseholdNewMemberOpen] = useState(false);
   const [householdMemberForm, setHouseholdMemberForm] = useState<{ householdId: number; centerId: number; headLabel: string; firstName: string; middleName: string; lastName: string; age: string; sex: "UNSPECIFIED" | "FEMALE" | "MALE" | "OTHER"; relationship: string }>({ householdId: 0, centerId: 0, headLabel: "", firstName: "", middleName: "", lastName: "", age: "18", sex: "UNSPECIFIED", relationship: "Member" });
+  /** Client §27: "Manage Your Family" opens this modal over the family's
+   * details and members, with a confirmed removal per member. */
+  const [familyManagerOpen, setFamilyManagerOpen] = useState(false);
+  const [removeMemberTarget, setRemoveMemberTarget] = useState<{ id: number; firstName: string; middleName: string | null; lastName: string; age: number; relationshipToHead: string | null } | null>(null);
+  /** Client §27: "Add Another Family" opens a form that registers a brand-new
+   * household instead of extending whichever family is currently selected. */
+  type FamilyMemberDraft = { lastName: string; firstName: string; middleName: string; age: string; sex: "UNSPECIFIED" | "FEMALE" | "MALE" | "OTHER"; relationship: string };
+  const emptyFamilyForm = () => ({
+    head: { lastName: "", firstName: "", middleName: "", age: "", sex: "UNSPECIFIED" as "UNSPECIFIED" | "FEMALE" | "MALE" | "OTHER", contactNumber: "", address: "", barangay: "", centerId: 0 },
+    members: [] as FamilyMemberDraft[],
+  });
+  const [addFamilyOpen, setAddFamilyOpen] = useState(false);
+  const [newFamilyForm, setNewFamilyForm] = useState(emptyFamilyForm());
   const { data: adviceItems } = trpc.advice.adminList.useQuery(undefined, {
     enabled: active === "Safety advice" && user?.role === "admin" && !isStaticSession(),
   });
@@ -2772,11 +2785,30 @@ function WorkspaceView({
       toast("Evacuee released.");
     },
   });
-  const assignEvacueeHouseholdMutation = trpc.operations.assignEvacueeHousehold.useMutation({
+  /** Client §27: a confirmed removal deletes the member's registry row, then
+   * refreshes the list, counts, and center occupancy together so the family
+   * view never lags behind the database. */
+  const removeFamilyMemberMutation = trpc.operations.removeHouseholdMember.useMutation({
     onSuccess: () => {
+      setRemoveMemberTarget(null);
       utils.operations.evacuees.invalidate();
       utils.operations.summary.invalidate();
-      toast("Household updated.");
+      utils.operations.centers.invalidate();
+      toast.success("Member removed from the family.");
+    },
+  });
+  /** Client §27: a successful save closes and resets the form (the pending
+   * guard blocks double submissions) and refreshes the registry counts. */
+  const registerFamilyMutation = trpc.operations.registerFamily.useMutation({
+    onSuccess: result => {
+      setAddFamilyOpen(false);
+      setNewFamilyForm(emptyFamilyForm());
+      utils.operations.evacuees.invalidate();
+      utils.operations.summary.invalidate();
+      utils.operations.centers.invalidate();
+      setSelectedHouseholdId(result.headId);
+      const total = result.memberIds.length + 1;
+      toast.success(`New family registered — ${total} member${total === 1 ? "" : "s"} total.`);
     },
   });
   /** Adds a member to a household through the modal form (spec 5.17). */
@@ -2798,6 +2830,39 @@ function WorkspaceView({
       householdId: householdMemberForm.householdId,
       relationshipToHead: householdMemberForm.relationship.trim() || "Member",
     });
+  }
+  /** Client §27: registers a separate family record — the head forms a
+   * brand-new household and every listed member is filed under THAT
+   * household, never under a family open elsewhere in the view. */
+  function submitNewFamily(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (registerFamilyMutation.isPending) return;
+    const { head, members } = newFamilyForm;
+    registerFamilyMutation.mutate({
+      head: {
+        firstName: head.firstName.trim(),
+        middleName: head.middleName.trim() || undefined,
+        lastName: head.lastName.trim(),
+        age: Number(head.age),
+        sex: head.sex,
+        contactNumber: head.contactNumber.trim() || undefined,
+        address: head.address.trim() || undefined,
+        barangay: head.barangay.trim() || undefined,
+        centerId: Number(head.centerId) || centerOptions[0]?.id || 1,
+      },
+      members: members.map(member => ({
+        firstName: member.firstName.trim(),
+        middleName: member.middleName.trim() || undefined,
+        lastName: member.lastName.trim(),
+        age: Number(member.age),
+        sex: member.sex,
+        relationshipToHead: member.relationship.trim() || "Member",
+      })),
+    });
+  }
+  /** Patches one draft member row of the Add Another Family form. */
+  function setFamilyMemberField(index: number, patch: Partial<FamilyMemberDraft>) {
+    setNewFamilyForm(form => ({ ...form, members: form.members.map((member, position) => (position === index ? { ...member, ...patch } : member)) }));
   }
   const endAlertMutation = trpc.admin.endAlert.useMutation({
     onSuccess: () => {
@@ -3167,14 +3232,17 @@ function WorkspaceView({
           <div><span className="eyebrow">PEOPLE REGISTRY</span><h2>Evacuees and households</h2><p>Manage residents and their household membership.</p>
             {evacueeStatusFilter !== "ALL" && <p className="empty-copy">Filtered by {evacueeStatusFilter === "PENDING" ? "pending placement" : evacueeStatusFilter}. <button type="button" className="incident-timeline-button" onClick={() => setEvacueeStatusFilter("ALL")}>Clear filter</button></p>}
           </div>
-          <div className="registry-search">
-            <Search size={15} />
-            <Input
-              value={registrySearch}
-              onChange={event => setRegistrySearch(event.target.value)}
-              placeholder="Search name, email, or household ID"
-              aria-label="Search the registry"
-            />
+          <div className="registry-tools">
+            <div className="registry-search">
+              <Search size={15} />
+              <Input
+                value={registrySearch}
+                onChange={event => setRegistrySearch(event.target.value)}
+                placeholder="Search name, email, or household ID"
+                aria-label="Search the registry"
+              />
+            </div>
+            <Button type="button" onClick={() => { setNewFamilyForm(emptyFamilyForm()); setAddFamilyOpen(true); }}>Add Another Family</Button>
           </div>
         </div>
         <div className="workspace-table-wrap">
@@ -3189,7 +3257,7 @@ function WorkspaceView({
                   <td>{(evacuees ?? []).filter(candidate => candidate.householdId === (head.householdId ?? head.id)).length}</td>
                   <td>{head.status}</td>
                   <td>
-                    <Button type="button" variant="outline" onClick={() => setSelectedHouseholdId(head.id)}>Manage family</Button>
+                    <Button type="button" variant="outline" onClick={() => { setSelectedHouseholdId(head.id); setRemoveMemberTarget(null); setFamilyManagerOpen(true); }}>Manage Your Family</Button>
                     <Button type="button" variant="outline" onClick={() => {
                       setHouseholdMemberForm({
                         householdId: head.householdId ?? head.id,
@@ -3210,35 +3278,131 @@ function WorkspaceView({
             </tbody>
           </table>
         </div>
-        {selectedHead && (
-          <div className="workspace-table-wrap">
-            <h3>Family members of {selectedHead.lastName}, {selectedHead.firstName}</h3>
-            <table className="workspace-table workspace-user-table">
-              <thead><tr><th>Member ID</th><th>Full name</th><th>Age</th><th>Relationship to head</th><th>Registration status</th><th>Actions</th></tr></thead>
-              <tbody>
-                {members.find(member => member.id === headRowId) && <tr key={selectedHead.id}>
-                  <td>{selectedHead.id}</td>
-                  <td>{selectedHead.lastName}, {selectedHead.firstName}{selectedHead.middleName ? ` ${selectedHead.middleName}` : ""}</td>
-                  <td>{selectedHead.age}</td>
-                  <td>Head of Household</td>
-                  <td>{selectedHead.status}</td>
-                  <td>-</td>
-                </tr>}
-                {members.filter(member => member.id !== headRowId).map(member => (
-                  <tr key={member.id}>
-                    <td>{member.id}</td>
-                    <td>{member.lastName}, {member.firstName}{member.middleName ? ` ${member.middleName}` : ""}</td>
-                    <td>{member.age}</td>
-                    <td>{member.relationshipToHead ?? "Member"}</td>
-                    <td>{member.status}</td>
-                    <td><Button type="button" variant="outline" disabled={assignEvacueeHouseholdMutation.isPending} onClick={() => {
-                      if (!window.confirm(`Remove ${member.firstName} ${member.lastName} from this household?`)) return;
-                      assignEvacueeHouseholdMutation.mutate({ evacueeId: member.id, householdId: null });
-                    }}>Remove member</Button></td>
-                  </tr>
+        {familyManagerOpen && selectedHead && (
+          <div className="modal-backdrop" onClick={() => { setFamilyManagerOpen(false); setRemoveMemberTarget(null); }}>
+            <div className="report-modal member-modal family-modal" onClick={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Manage Your Family">
+              <div className="modal-title">
+                <div><span className="eyebrow">HOUSEHOLD REGISTRY</span><h2>Manage Your Family</h2></div>
+                <button type="button" onClick={() => { setFamilyManagerOpen(false); setRemoveMemberTarget(null); }} aria-label="Close the family manager"><X size={18} /></button>
+              </div>
+              <p className="empty-copy">Household of {selectedHead.lastName}, {selectedHead.firstName}.</p>
+              <div className="family-details">
+                <div><span>Household ID</span><strong>{selectedHead.householdId ?? selectedHead.id}</strong></div>
+                <div><span>Head of household</span><strong>{selectedHead.lastName}, {selectedHead.firstName}{selectedHead.middleName ? ` ${selectedHead.middleName}` : ""}</strong></div>
+                <div><span>Account</span><strong>{selectedHead.userEmail ?? "Walk-in registry"}</strong></div>
+                <div><span>Evacuation center</span><strong>{selectedHead.centerId != null ? (centerNameById.get(selectedHead.centerId) ?? `Center #${selectedHead.centerId}`) : "Not assigned"}</strong></div>
+                <div><span>Status</span><strong>{selectedHead.status}</strong></div>
+                <div><span>Family members</span><strong>{members.length}</strong></div>
+              </div>
+              <div className="workspace-table-wrap">
+                <table className="workspace-table workspace-user-table">
+                  <thead><tr><th>Member ID</th><th>Full name</th><th>Age</th><th>Relationship to head</th><th>Registration status</th><th>Actions</th></tr></thead>
+                  <tbody>
+                    {members.find(member => member.id === headRowId) && <tr key={selectedHead.id}>
+                      <td>{selectedHead.id}</td>
+                      <td>{selectedHead.lastName}, {selectedHead.firstName}{selectedHead.middleName ? ` ${selectedHead.middleName}` : ""}</td>
+                      <td>{selectedHead.age}</td>
+                      <td>Head of Household</td>
+                      <td>{selectedHead.status}</td>
+                      <td><span className="empty-copy">Head — cannot be removed</span></td>
+                    </tr>}
+                    {members.filter(member => member.id !== headRowId).map(member => (
+                      <tr key={member.id}>
+                        <td>{member.id}</td>
+                        <td>{member.lastName}, {member.firstName}{member.middleName ? ` ${member.middleName}` : ""}</td>
+                        <td>{member.age}</td>
+                        <td>{member.relationshipToHead ?? "Member"}</td>
+                        <td>{member.status}</td>
+                        <td><Button type="button" variant="outline" disabled={removeFamilyMemberMutation.isPending || removeMemberTarget?.id === member.id} onClick={() => setRemoveMemberTarget(member)}>Remove member</Button></td>
+                      </tr>
+                    ))}
+                    {members.filter(member => member.id !== headRowId).length === 0 && (
+                      <tr><td colSpan={6}><span className="empty-copy">Only the head of household remains in this family.</span></td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {removeMemberTarget && (
+                <div className="family-confirm" role="alertdialog" aria-label={`Confirm removal of ${removeMemberTarget.firstName} ${removeMemberTarget.lastName}`}>
+                  <p><strong>Remove {removeMemberTarget.firstName} {removeMemberTarget.middleName ? `${removeMemberTarget.middleName} ` : ""}{removeMemberTarget.lastName} from this family?</strong></p>
+                  <p>Member ID {removeMemberTarget.id} · {removeMemberTarget.relationshipToHead ?? "Member"} · age {removeMemberTarget.age}. This permanently deletes the member’s registry record and updates the family member count.</p>
+                  <div className="modal-actions">
+                    <Button type="button" variant="outline" disabled={removeFamilyMemberMutation.isPending} onClick={() => setRemoveMemberTarget(null)}>Cancel</Button>
+                    <Button type="button" disabled={removeFamilyMemberMutation.isPending} onClick={() => removeFamilyMemberMutation.mutate({ evacueeId: removeMemberTarget.id })}>{removeFamilyMemberMutation.isPending ? "Removing…" : "Remove member"}</Button>
+                  </div>
+                  {removeFamilyMemberMutation.error && <div className="login-error" role="alert">{removeFamilyMemberMutation.error.message}</div>}
+                </div>
+              )}
+              <div className="modal-actions">
+                <Button type="button" variant="outline" onClick={() => { setFamilyManagerOpen(false); setRemoveMemberTarget(null); }}>Close</Button>
+                <Button type="button" onClick={() => {
+                  setHouseholdMemberForm({
+                    householdId: selectedHead.householdId ?? selectedHead.id,
+                    centerId: selectedHead.centerId ?? (centerOptions[0]?.id ?? 1),
+                    headLabel: `${selectedHead.lastName}, ${selectedHead.firstName}`,
+                    firstName: "",
+                    middleName: "",
+                    lastName: "",
+                    age: "18",
+                    sex: "UNSPECIFIED",
+                    relationship: "Member",
+                  });
+                  setHouseholdNewMemberOpen(true);
+                }}>Add member</Button>
+              </div>
+            </div>
+          </div>
+        )}
+        {addFamilyOpen && (
+          <div className="modal-backdrop" onClick={() => setAddFamilyOpen(false)}>
+            <form className="report-modal member-modal family-modal" onClick={event => event.stopPropagation()} onSubmit={submitNewFamily}>
+              <div className="modal-title">
+                <div><span className="eyebrow">HOUSEHOLD REGISTRY</span><h2>Add Another Family</h2></div>
+                <button type="button" onClick={() => setAddFamilyOpen(false)} aria-label="Cancel adding a family"><X size={18} /></button>
+              </div>
+              <p className="empty-copy">Registers a separate family record with its own head of household and members. The new family becomes its own household — it is never added to a family you are currently managing.</p>
+              <h3 className="family-section-title">Head of household</h3>
+              <label>Last name<Input name="headLastName" value={newFamilyForm.head.lastName} onChange={event => setNewFamilyForm({ ...newFamilyForm, head: { ...newFamilyForm.head, lastName: event.target.value } })} placeholder="Dela Cruz" required /></label>
+              <label>First name<Input name="headFirstName" value={newFamilyForm.head.firstName} onChange={event => setNewFamilyForm({ ...newFamilyForm, head: { ...newFamilyForm.head, firstName: event.target.value } })} placeholder="Juan" required /></label>
+              <label>Middle name (optional)<Input name="headMiddleName" value={newFamilyForm.head.middleName} onChange={event => setNewFamilyForm({ ...newFamilyForm, head: { ...newFamilyForm.head, middleName: event.target.value } })} placeholder="Santos" /></label>
+              <label>Age<Input name="headAge" type="number" min={0} max={120} value={newFamilyForm.head.age} onChange={event => setNewFamilyForm({ ...newFamilyForm, head: { ...newFamilyForm.head, age: event.target.value } })} required /></label>
+              <label>Sex<select className="role-select" name="headSex" value={newFamilyForm.head.sex} onChange={event => setNewFamilyForm({ ...newFamilyForm, head: { ...newFamilyForm.head, sex: event.target.value as typeof newFamilyForm.head.sex } })}><option value="UNSPECIFIED">Unspecified</option><option value="FEMALE">Female</option><option value="MALE">Male</option><option value="OTHER">Other</option></select></label>
+              <label>Contact number (optional)<Input name="headContact" value={newFamilyForm.head.contactNumber} onChange={event => setNewFamilyForm({ ...newFamilyForm, head: { ...newFamilyForm.head, contactNumber: event.target.value } })} placeholder="09171234567" /></label>
+              <label>Address (optional)<Input name="headAddress" value={newFamilyForm.head.address} onChange={event => setNewFamilyForm({ ...newFamilyForm, head: { ...newFamilyForm.head, address: event.target.value } })} placeholder="House no., street, town" /></label>
+              <label>Barangay (optional)<Input name="headBarangay" value={newFamilyForm.head.barangay} onChange={event => setNewFamilyForm({ ...newFamilyForm, head: { ...newFamilyForm.head, barangay: event.target.value } })} placeholder="Barangay" /></label>
+              <label>Evacuation center<select className="role-select" name="headCenter" value={newFamilyForm.head.centerId} onChange={event => setNewFamilyForm({ ...newFamilyForm, head: { ...newFamilyForm.head, centerId: Number(event.target.value) } })} required>
+                {centerOptions.map(center => <option key={center.id} value={center.id}>{center.name} — {center.maximumCapacity - center.currentOccupancy} slot(s) free</option>)}
+              </select></label>
+              <div className="family-member-block">
+                <div className="family-member-head">
+                  <h3 className="family-section-title family-section-title-flush">Family members ({newFamilyForm.members.length})</h3>
+                  <Button type="button" variant="outline" onClick={() => setNewFamilyForm(form => ({ ...form, members: [...form.members, { lastName: "", firstName: "", middleName: "", age: "", sex: "UNSPECIFIED", relationship: "" }] }))}>Add family member</Button>
+                </div>
+                <p className="empty-copy">Optional — add every person living with this household. Each member is saved as its own registry row under the NEW family.</p>
+                {newFamilyForm.members.map((member, index) => (
+                  <div className="family-member-row" key={index} data-member-index={index}>
+                    <div className="family-member-row-head">
+                      <strong>Member {index + 1}</strong>
+                      <button type="button" onClick={() => setNewFamilyForm(form => ({ ...form, members: form.members.filter((_, position) => position !== index) }))} aria-label={`Remove member ${index + 1} from the form`}><X size={15} /></button>
+                    </div>
+                    <div className="family-member-fields">
+                      <label>Last name<Input data-field="lastName" value={member.lastName} onChange={event => setFamilyMemberField(index, { lastName: event.target.value })} placeholder="Dela Cruz" required /></label>
+                      <label>First name<Input data-field="firstName" value={member.firstName} onChange={event => setFamilyMemberField(index, { firstName: event.target.value })} placeholder="Juan" required /></label>
+                      <label>Middle name (optional)<Input data-field="middleName" value={member.middleName} onChange={event => setFamilyMemberField(index, { middleName: event.target.value })} placeholder="Santos" /></label>
+                      <label>Age<Input data-field="age" type="number" min={0} max={120} value={member.age} onChange={event => setFamilyMemberField(index, { age: event.target.value })} required /></label>
+                      <label>Sex<select className="role-select" data-field="sex" value={member.sex} onChange={event => setFamilyMemberField(index, { sex: event.target.value as FamilyMemberDraft["sex"] })}><option value="UNSPECIFIED">Unspecified</option><option value="FEMALE">Female</option><option value="MALE">Male</option><option value="OTHER">Other</option></select></label>
+                      <label>Relationship to head<Input data-field="relationship" list="family-relationships" value={member.relationship} onChange={event => setFamilyMemberField(index, { relationship: event.target.value })} placeholder="Spouse, Child, Parent…" required /></label>
+                    </div>
+                  </div>
                 ))}
-              </tbody>
-            </table>
+                <datalist id="family-relationships"><option value="Spouse" /><option value="Child" /><option value="Parent" /><option value="Sibling" /><option value="Grandparent" /><option value="Other relative" /></datalist>
+              </div>
+              {registerFamilyMutation.error && <div className="login-error" role="alert">{registerFamilyMutation.error.message}</div>}
+              <div className="modal-actions">
+                <Button type="button" variant="outline" disabled={registerFamilyMutation.isPending} onClick={() => setAddFamilyOpen(false)}>Cancel</Button>
+                <Button type="submit" disabled={registerFamilyMutation.isPending}>{registerFamilyMutation.isPending ? "Registering family…" : "Register family"}</Button>
+              </div>
+            </form>
           </div>
         )}
         {householdNewMemberOpen && (

@@ -85,6 +85,8 @@ import {
   provisionDemoAccounts,
   queueReportExport,
   registerEvacuee,
+  registerFamily,
+  removeHouseholdMember,
   countStoredEvidenceForReport,
   updateEvacueeHousehold,
   setActiveSessionToken,  registerLocalUser,
@@ -206,6 +208,24 @@ const evacueeInput = z.object({
   centerId: z.number().int().positive(),
   householdId: z.number().int().positive().nullable().optional(),
   relationshipToHead: z.string().trim().max(60).optional(),
+});
+/**
+ * Client §27 ("Add Another Family"): the head form plus its optional member
+ * rows. The household fields (householdId/relationshipToHead) are the
+ * server's to decide — the head forms a brand-new household and every member
+ * is filed under it, never under a family the caller happens to have open.
+ */
+const familyMemberInput = z.object({
+  firstName: z.string().trim().min(1),
+  middleName: z.string().trim().max(80).optional(),
+  lastName: z.string().trim().min(1),
+  age: z.number().int().min(0).max(120),
+  sex: z.enum(["FEMALE", "MALE", "OTHER", "UNSPECIFIED"]).default("UNSPECIFIED"),
+  relationshipToHead: z.string().trim().min(1).max(60).default("Member"),
+});
+const familyInput = z.object({
+  head: evacueeInput.omit({ householdId: true, relationshipToHead: true }),
+  members: z.array(familyMemberInput).max(20).default([]),
 });
 const centerInput = z.object({
   centerCode: z.string().min(2).max(32),
@@ -1149,6 +1169,44 @@ export const appRouter = router({
           entityType: "evacuee",
           entityId: result.id,
         });
+        return result;
+      }),
+    /**
+     * Client §27 "Add Another Family": one call registers a separate family
+     * record — a brand-new household headed by the submitted head, with every
+     * member filed under that new household. Staff may only do this for a
+     * center they are assigned to.
+     */
+    registerFamily: roleProcedure(["admin", "staff"])
+      .input(familyInput)
+      .mutation(async ({ ctx, input }) => {
+        if (ctx.user.role === "staff" && !(await listAssignedCenterIds(ctx.user.id)).includes(input.head.centerId))
+          throw new TRPCError({ code: "FORBIDDEN", message: "You can only manage your assigned evacuation center." });
+        const result = await registerFamily(
+          { ...input.head, relationshipToHead: "Head", status: "ACTIVE" },
+          input.members.map(member => ({ ...member, centerId: input.head.centerId, status: "ACTIVE" }))
+        );
+        for (const evacueeId of [result.headId, ...result.memberIds]) {
+          broadcastEvacuee({ evacueeId, centerId: input.head.centerId, action: "REGISTERED" });
+          await logActivity({ actorId: ctx.user.id, action: "CREATE", entityType: "evacuee", entityId: evacueeId });
+        }
+        return result;
+      }),
+    /**
+     * Client §27 family management: drop a member from their family for good.
+     * The head is protected inside the db function, and staff are limited to
+     * their own center's people, mirroring assignEvacueeHousehold.
+     */
+    removeHouseholdMember: roleProcedure(["admin", "staff"])
+      .input(z.object({ evacueeId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const person = await getEvacueeById(input.evacueeId);
+        if (!person) throw new TRPCError({ code: "NOT_FOUND", message: "Evacuee not found." });
+        if (ctx.user.role === "staff" && person.centerId != null && !(await listAssignedCenterIds(ctx.user.id)).includes(person.centerId))
+          throw new TRPCError({ code: "FORBIDDEN", message: "You can only manage your assigned evacuation center." });
+        const result = await removeHouseholdMember(input.evacueeId);
+        broadcastEvacuee({ evacueeId: input.evacueeId, centerId: person.centerId, action: "RELEASED" });
+        await logActivity({ actorId: ctx.user.id, action: "HOUSEHOLD_MEMBER_REMOVED", entityType: "evacuee", entityId: input.evacueeId });
         return result;
       }),
     transferEvacuee: roleProcedure(["admin", "staff"])

@@ -45,6 +45,13 @@ const RESPONDER_EMAIL = `cluster.responder.${stamp}@gmail.com`;
 const ADMIN_EMAIL = `cluster.admin.${stamp}@gmail.com`;
 const STAFF_EMAIL = `cluster.staff.${stamp}@gmail.com`;
 const CODE_B = `CLUSTER-B-${stamp}`.toUpperCase();
+/** Client §27: heads registered by the family checks carry this exact address
+ *  so finish() can find every row of those households (members inherit the
+ *  household, not the address) and clean them up slot-accurately. */
+const FAMILY_ADDRESS = `Cluster family check ${stamp} — safe to delete`;
+const API_FAMILY = "Clusterapifamily";
+const STAFF_FAMILY = "Clusterstafffamily";
+const UI_FAMILY = "Clusteruifamily";
 
 const checks = [];
 const record = (ok, label, detail = "") => {
@@ -294,6 +301,83 @@ async function main() {
   const idxA = demoList.findIndex(d => d.email === probeA.value?.email);
   record(idxA >= 0 && idxZ >= 0 && idxA < idxZ, "demo-accounts list sorted (Alpha probe before Zulu probe)", `alpha@${idxA} zulu@${idxZ} n=${demoList.length}`);
 
+  console.log("\n7d. Staff family management (client §27) — separate families + confirmed removals");
+  const centers = await trpc("operations.centers", { cookie: admin.cookie });
+  record(!centers.error, "centers query answers", centers.error ?? "");
+  const openCenters = (centers.value ?? []).filter(c => c.status === "OPEN");
+  const familyCenter = openCenters.slice().sort((a, b) => (b.maximumCapacity - b.currentOccupancy) - (a.maximumCapacity - a.currentOccupancy))[0];
+  record(Boolean(familyCenter), "an open center with the most room hosts the family checks",
+    familyCenter ? `${familyCenter.name} ${familyCenter.currentOccupancy}/${familyCenter.maximumCapacity}` : "none");
+
+  if (familyCenter) {
+    // Permissions first: staff with no center assignment are refused…
+    const staffDenied = await trpc("operations.registerFamily", {
+      method: "POST", cookie: staff.cookie,
+      input: { head: { firstName: "No", lastName: "Permission", age: 30, centerId: familyCenter.id }, members: [] },
+    });
+    record(Boolean(staffDenied.error) && /assigned evacuation center/.test(staffDenied.error ?? ""),
+      "staff without a center assignment cannot register a family (permissions respected)", staffDenied.error ?? "no error");
+
+    // …then staff are assigned (over the tunnel) and the real flows run.
+    await db.query("INSERT INTO centerStaff (centerId, userId) VALUES (?, ?)", [familyCenter.id, staffDbId]);
+
+    const apiFamily = await trpc("operations.registerFamily", {
+      method: "POST", cookie: admin.cookie,
+      input: {
+        head: { firstName: "Mila", lastName: API_FAMILY, age: 42, sex: "FEMALE", centerId: familyCenter.id, address: FAMILY_ADDRESS, barangay: "Pateros" },
+        members: [
+          { firstName: "Nico", lastName: API_FAMILY, age: 10, sex: "MALE", relationshipToHead: "Child" },
+          { firstName: "Ana", lastName: API_FAMILY, age: 38, sex: "FEMALE", relationshipToHead: "Spouse" },
+        ],
+      },
+    });
+    record(!apiFamily.error, "registerFamily saves a separate household with head + members", apiFamily.error ?? `headId=${apiFamily.value?.headId} members=${apiFamily.value?.memberIds?.length}`);
+    const apiHeadId = apiFamily.value?.headId;
+
+    const staffFamily = await trpc("operations.registerFamily", {
+      method: "POST", cookie: staff.cookie,
+      input: {
+        head: { firstName: "Sario", lastName: STAFF_FAMILY, age: 45, sex: "MALE", centerId: familyCenter.id, address: FAMILY_ADDRESS },
+        members: [{ firstName: "Lira", lastName: STAFF_FAMILY, age: 40, sex: "FEMALE", relationshipToHead: "Spouse" }],
+      },
+    });
+    record(!staffFamily.error, "assigned staff can register a family for their own center", staffFamily.error ?? `headId=${staffFamily.value?.headId}`);
+
+    const famRows1 = (await trpc("operations.evacuees", { cookie: admin.cookie, input: {} })).value ?? [];
+    const headRow = famRows1.find(r => r.id === apiHeadId);
+    record(headRow?.relationshipToHead === "Head" && headRow?.householdId === apiHeadId,
+      "the new head becomes its own household (Head relationship + self householdId)",
+      JSON.stringify({ rel: headRow?.relationshipToHead, householdId: headRow?.householdId }));
+    const memberRows = famRows1.filter(r => r.householdId === apiHeadId && r.id !== apiHeadId);
+    record(memberRows.length === 2, "both members belong to the NEW family — never the selected one", `members=${memberRows.length}`);
+    record(memberRows.some(r => r.relationshipToHead === "Child") && memberRows.some(r => r.relationshipToHead === "Spouse"),
+      "member relationships stored on the new family");
+
+    // Removal: saved to the DB, list + count update at once, head protected.
+    const childId = memberRows.find(r => r.relationshipToHead === "Child")?.id;
+    const removal = await trpc("operations.removeHouseholdMember", { method: "POST", cookie: admin.cookie, input: { evacueeId: childId } });
+    record(!removal.error, "removeHouseholdMember saves the member removal", removal.error ?? `evacueeId=${childId}`);
+    const famRows2 = (await trpc("operations.evacuees", { cookie: admin.cookie, input: {} })).value ?? [];
+    record(!famRows2.some(r => r.id === childId), "the removed member is gone from the registry list", `id=${childId}`);
+    const familyNow = famRows2.filter(r => r.householdId === apiHeadId || r.id === apiHeadId);
+    record(familyNow.length === 1, "the family member count drops immediately after the removal", `family=${familyNow.length}`);
+    const headRemoval = await trpc("operations.removeHouseholdMember", { method: "POST", cookie: admin.cookie, input: { evacueeId: apiHeadId } });
+    record(Boolean(headRemoval.error) && /head of a household/.test(headRemoval.error ?? ""),
+      "removing the household head is refused", headRemoval.error ?? "no error");
+    const missingRemoval = await trpc("operations.removeHouseholdMember", { method: "POST", cookie: admin.cookie, input: { evacueeId: 99999999 } });
+    record(Boolean(missingRemoval.error), "removing an unknown member reports an error", missingRemoval.error ?? "no error");
+
+    // Staff removal on their own assigned center completes the staff flow.
+    const staffRows = (await trpc("operations.evacuees", { cookie: staff.cookie, input: {} })).value ?? [];
+    const staffHeadId = staffFamily.value?.headId;
+    const staffSpouse = staffRows.find(r => r.householdId === staffHeadId && r.id !== staffHeadId);
+    record(Boolean(staffSpouse), "assigned staff see their new family in the registry", staffSpouse ? `id=${staffSpouse.id}` : "missing");
+    if (staffSpouse) {
+      const staffRemoval = await trpc("operations.removeHouseholdMember", { method: "POST", cookie: staff.cookie, input: { evacueeId: staffSpouse.id } });
+      record(!staffRemoval.error, "assigned staff can remove a member from their own center", staffRemoval.error ?? "");
+    }
+  }
+
   console.log("\n7c. Queue UI + cross-tab kick (specs 3.4/1.8) — headless two-tab browser");
   const reportC = await mkReport(null);
   const idC = reportC.value?.id;
@@ -458,6 +542,11 @@ async function browserKickCheck() {
     } catch (e) {
       record(false, "metric/report state browser check failed", String(e).slice(0, 220));
     }
+    try {
+      await familyManagementCheck(browser, login);
+    } catch (e) {
+      record(false, "family management browser check failed", String(e).slice(0, 220));
+    }
   } catch (e) {
     // A browser problem must not abort the run before finish() cleans up.
     record(false, "cross-tab kick browser check failed", String(e).slice(0, 220));
@@ -573,6 +662,224 @@ async function reportListStatesCheck(browser, login) {
   }
 }
 
+/**
+ * Client §27: the staff Evacuees section's two family flows end to end.
+ * "Manage Your Family" opens a modal with the selected family's details and
+ * members; each member has a Remove button that asks for confirmation naming
+ * the member before deleting, and the member list + count update on the spot.
+ * "Add Another Family" opens the registration form, blocks an empty submit,
+ * and saves a brand-new household record of its own.
+ */
+async function familyManagementCheck(browser, login) {
+  const page = await browser.newPage();
+  try {
+    await login(page, ADMIN_EMAIL);
+    await evalPoll(page,
+      () => [...document.querySelectorAll(".side-nav button")].some(b => /Evacuees/.test(b.textContent ?? "")),
+      s => s, 15000, 300);
+    await page.evaluate(() => {
+      const nav = [...document.querySelectorAll(".side-nav button")].find(b => /Evacuees/.test(b.textContent ?? ""));
+      nav?.click();
+    });
+
+    const toolbar = await evalPoll(page,
+      () => ({
+        addFamily: [...document.querySelectorAll("button")].some(b => (b.textContent ?? "").trim() === "Add Another Family"),
+        manage: [...document.querySelectorAll(".workspace-user-table button")].some(b => (b.textContent ?? "").trim() === "Manage Your Family"),
+      }),
+      s => s.addFamily && s.manage, 15000, 400);
+    record(Boolean(toolbar?.addFamily), "Evacuees section shows the Add Another Family button (client §27)");
+    record(Boolean(toolbar?.manage), "family rows offer Manage Your Family (client §27)");
+
+    // Open the family the API step left as head + spouse.
+    const opened = await (async () => {
+      const deadline = Date.now() + 12000;
+      while (Date.now() < deadline) {
+        const ok = await page.evaluate(() => {
+          const row = [...document.querySelectorAll(".workspace-user-table tbody tr")].find(tr => new RegExp(API_FAMILY).test(tr.textContent ?? ""));
+          const btn = row ? [...row.querySelectorAll("button")].find(b => (b.textContent ?? "").trim() === "Manage Your Family") : null;
+          btn?.click();
+          return Boolean(btn);
+        }).catch(() => false);
+        if (ok) return true;
+        await new Promise(r => setTimeout(r, 500));
+      }
+      return false;
+    })();
+    record(Boolean(opened), "Manage Your Family opens the selected family in a modal (client §27)");
+
+    const familyInfo = await evalPoll(page,
+      () => {
+        const modal = [...document.querySelectorAll("div.family-modal")].find(m => /Manage Your Family/.test(m.textContent ?? ""));
+        if (!modal) return null;
+        const details = modal.querySelector(".family-details")?.textContent ?? "";
+        const rows = [...modal.querySelectorAll(".workspace-user-table tbody tr")].map(tr => tr.textContent ?? "");
+        return {
+          details,
+          count: details.match(/Family members(\d+)/)?.[1] ?? null,
+          removes: rows.length && [...modal.querySelectorAll(".workspace-user-table tbody tr")].flatMap(tr => [...tr.querySelectorAll("button")]).filter(b => /Remove member/.test(b.textContent ?? "")).length,
+          rows,
+        };
+      },
+      s => Boolean(s), 10000, 400);
+    record(Boolean(familyInfo?.details) && /Household ID/.test(familyInfo?.details ?? ""),
+      "family management modal shows the selected family's details (client §27)",
+      JSON.stringify((familyInfo?.details ?? "").slice(0, 140)));
+    record(familyInfo?.count === "2", "modal shows the live family member count (head + spouse)", `count=${familyInfo?.count}`);
+    record(/Ana/.test((familyInfo?.rows ?? []).join(" ")) && (familyInfo?.removes ?? 0) >= 1,
+      "every member row carries a Delete/Remove button (client §27)", `removes=${familyInfo?.removes}`);
+
+    const clickRemoveOn = async name => page.evaluate(memberName => {
+      const modal = [...document.querySelectorAll("div.family-modal")].find(m => /Manage Your Family/.test(m.textContent ?? ""));
+      const row = [...(modal?.querySelectorAll(".workspace-user-table tbody tr") ?? [])].find(tr => new RegExp(memberName).test(tr.textContent ?? ""));
+      const btn = row ? [...row.querySelectorAll("button")].find(b => /Remove member/.test(b.textContent ?? "")) : null;
+      btn?.click();
+      return Boolean(btn);
+    }, name).catch(() => false);
+
+    // Removal asks first, and the confirmation names the selected member.
+    await clickRemoveOn("Ana");
+    const confirmInfo = await evalPoll(page,
+      () => {
+        const panel = document.querySelector(".family-confirm");
+        return panel ? { text: panel.textContent ?? "", buttons: [...panel.querySelectorAll("button")].map(b => (b.textContent ?? "").trim()) } : null;
+      },
+      s => Boolean(s), 8000, 300);
+    record(/Ana/.test(confirmInfo?.text ?? "") && /Member ID \d+/.test(confirmInfo?.text ?? "") && (confirmInfo?.buttons ?? []).includes("Remove member"),
+      "deletion asks for confirmation and clearly identifies the selected member (client §27)",
+      JSON.stringify((confirmInfo?.text ?? "").slice(0, 170)));
+
+    await page.evaluate(() => {
+      const panel = document.querySelector(".family-confirm");
+      const cancel = [...(panel?.querySelectorAll("button") ?? [])].find(b => (b.textContent ?? "").trim() === "Cancel");
+      cancel?.click();
+    }).catch(() => {});
+    const afterCancel = await evalPoll(page,
+      () => ({
+        panel: Boolean(document.querySelector(".family-confirm")),
+        member: /Ana/.test([...document.querySelectorAll("div.family-modal .workspace-user-table")].map(t => t.textContent ?? "").join(" ")),
+      }),
+      s => !s.panel, 6000, 300);
+    record(!afterCancel?.panel && Boolean(afterCancel?.member),
+      "cancelling keeps the member untouched (client §27)", JSON.stringify(afterCancel));
+
+    // Confirming for real deletes the member and updates the count on the spot.
+    await clickRemoveOn("Ana");
+    await evalPoll(page, () => Boolean(document.querySelector(".family-confirm")), s => s, 6000, 300);
+    await page.evaluate(() => {
+      const panel = document.querySelector(".family-confirm");
+      const confirm = [...(panel?.querySelectorAll("button") ?? [])].find(b => (b.textContent ?? "").trim() === "Remove member");
+      confirm?.click();
+    }).catch(() => {});
+    const afterRemove = await evalPoll(page,
+      () => {
+        const modal = [...document.querySelectorAll("div.family-modal")].find(m => /Manage Your Family/.test(m.textContent ?? ""));
+        if (!modal) return null;
+        const rows = [...modal.querySelectorAll(".workspace-user-table tbody tr")].map(tr => tr.textContent ?? "").join(" | ");
+        return {
+          memberGone: !/Ana/.test(rows),
+          count: (modal.querySelector(".family-details")?.textContent ?? "").match(/Family members(\d+)/)?.[1] ?? null,
+        };
+      },
+      s => Boolean(s) && s.memberGone && s.count === "1", 15000, 500);
+    record(Boolean(afterRemove?.memberGone) && afterRemove?.count === "1",
+      "confirmed removal deletes the member and the count updates immediately (client §27)",
+      `count=${afterRemove?.count} gone=${afterRemove?.memberGone}`);
+
+    await page.evaluate(() => {
+      const modal = [...document.querySelectorAll("div.family-modal")].find(m => /Manage Your Family/.test(m.textContent ?? ""));
+      const close = [...(modal?.querySelectorAll("button") ?? [])].find(b => (b.textContent ?? "").trim() === "Close");
+      close?.click();
+    }).catch(() => {});
+    await evalPoll(page, () => !document.querySelector("div.family-modal"), s => s, 6000, 300);
+
+    // Add Another Family: the form opens, refuses an empty submit, then saves.
+    await page.evaluate(() => {
+      const btn = [...document.querySelectorAll("button")].find(b => (b.textContent ?? "").trim() === "Add Another Family");
+      btn?.click();
+    }).catch(() => {});
+    const formOpen = await evalPoll(page,
+      () => Boolean([...document.querySelectorAll("form.family-modal h2")].find(h => /Add Another Family/.test(h.textContent ?? ""))),
+      s => s, 8000, 300);
+    record(Boolean(formOpen), "Add Another Family opens the family registration form (client §27)");
+
+    await page.evaluate(() => {
+      const form = document.querySelector("form.family-modal");
+      form?.querySelector("button[type='submit']")?.click();
+    }).catch(() => {});
+    await new Promise(r => setTimeout(r, 1500));
+    const emptyBlocked = await page.evaluate(() =>
+      Boolean([...document.querySelectorAll("form.family-modal h2")].find(h => /Add Another Family/.test(h.textContent ?? ""))));
+    record(Boolean(emptyBlocked), "empty submission is blocked by required-field validation (client §27)");
+
+    await page.type('input[name="headLastName"]', UI_FAMILY);
+    await page.type('input[name="headFirstName"]', "Bella");
+    await page.type('input[name="headAge"]', "36");
+    await page.type('input[name="headAddress"]', FAMILY_ADDRESS);
+    await page.type('input[name="headBarangay"]', "Pateros");
+    const centerValue = await page.$eval('select[name="headCenter"] option', o => o.value).catch(() => null);
+    if (centerValue) await page.select('select[name="headCenter"]', centerValue);
+    record(Boolean(centerValue), "the family form offers an evacuation center to choose", `value=${centerValue}`);
+
+    await page.evaluate(() => {
+      const btn = [...(document.querySelectorAll("form.family-modal button") ?? [])].find(b => (b.textContent ?? "").trim() === "Add family member");
+      btn?.click();
+    }).catch(() => {});
+    const memberRow = await evalPoll(page,
+      () => Boolean(document.querySelector('form.family-modal [data-member-index="0"]')),
+      s => s, 6000, 300);
+    record(Boolean(memberRow), "the form accepts additional family members (client §27)");
+    await page.type('form.family-modal [data-member-index="0"] input[data-field="lastName"]', UI_FAMILY);
+    await page.type('form.family-modal [data-member-index="0"] input[data-field="firstName"]', "Cesar");
+    await page.type('form.family-modal [data-member-index="0"] input[data-field="age"]', "11");
+    await page.type('form.family-modal [data-member-index="0"] input[data-field="relationship"]', "Child");
+
+    await page.evaluate(() => {
+      const form = document.querySelector("form.family-modal");
+      form?.querySelector("button[type='submit']")?.click();
+    }).catch(() => {});
+    const saved = await evalPoll(page,
+      () => ({
+        closed: !document.querySelector("form.family-modal"),
+        row: [...document.querySelectorAll(".workspace-user-table tbody tr")].some(tr => new RegExp(UI_FAMILY).test(tr.textContent ?? "")),
+      }),
+      s => s.closed && s.row, 25000, 600);
+    record(Boolean(saved?.closed) && Boolean(saved?.row),
+      "the new family is saved as its own record and appears in the list (client §27)", JSON.stringify(saved));
+
+    // The saved family opens as its own household with its members.
+    const reopened = await (async () => {
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline) {
+        const ok = await page.evaluate(() => {
+          const row = [...document.querySelectorAll(".workspace-user-table tbody tr")].find(tr => new RegExp(UI_FAMILY).test(tr.textContent ?? ""));
+          const btn = row ? [...row.querySelectorAll("button")].find(b => (b.textContent ?? "").trim() === "Manage Your Family") : null;
+          btn?.click();
+          return Boolean(btn);
+        }).catch(() => false);
+        if (ok) return true;
+        await new Promise(r => setTimeout(r, 400));
+      }
+      return false;
+    })();
+    const newFamilyInfo = await evalPoll(page,
+      () => {
+        const modal = [...document.querySelectorAll("div.family-modal")].find(m => /Manage Your Family/.test(m.textContent ?? ""));
+        if (!modal) return null;
+        return {
+          count: (modal.querySelector(".family-details")?.textContent ?? "").match(/Family members(\d+)/)?.[1] ?? null,
+          rows: [...modal.querySelectorAll(".workspace-user-table tbody tr")].map(tr => tr.textContent ?? "").join(" | "),
+        };
+      },
+      s => Boolean(s && s.count), 8000, 400);
+    record(Boolean(reopened) && newFamilyInfo?.count === "2" && new RegExp(UI_FAMILY).test(newFamilyInfo?.rows ?? ""),
+      "the saved family opens as its OWN household with head + member (client §27)",
+      `count=${newFamilyInfo?.count} rows=${JSON.stringify((newFamilyInfo?.rows ?? "").slice(0, 150))}`);
+  } finally {
+    await page.close();
+  }
+}
+
 async function finish(db, flow, provisioned, extraEmails = []) {
   console.log("\n8. DB verification + cleanup (tunnel 127.0.0.1:3307)");
   try {
@@ -621,6 +928,27 @@ async function finish(db, flow, provisioned, extraEmails = []) {
         catch (e) { console.log(`    cleanup skipped: ${sql.slice(0, 55)}… (${e.message.slice(0, 55)})`); }
       }
     }
+    // Client §27: family-check heads carry the address marker; their members
+    // live under those households. Delete the rows and hand every center its
+    // slots back so repeated runs never drift occupancy.
+    try {
+      const [heads] = await db.query("SELECT id FROM evacuees WHERE address = ?", [FAMILY_ADDRESS]);
+      const headIds = heads.map(r => r.id);
+      if (headIds.length) {
+        const ph = headIds.map(() => "?").join(",");
+        const predicate = `id IN (${ph}) OR householdId IN (${ph})`;
+        const params = [...headIds, ...headIds];
+        const [rows] = await db.query(`SELECT centerId FROM evacuees WHERE ${predicate}`, params);
+        const perCenter = new Map();
+        for (const row of rows) perCenter.set(row.centerId, (perCenter.get(row.centerId) ?? 0) + 1);
+        for (const [centerId, n] of perCenter) {
+          await db.query("UPDATE evacuationCenters SET currentOccupancy = GREATEST(currentOccupancy - ?, 0) WHERE id = ?", [n, centerId]);
+          await db.query("UPDATE evacuationCenters SET status = CASE WHEN status = 'FULL' AND currentOccupancy < maximumCapacity THEN 'OPEN' ELSE status END WHERE id = ?", [centerId]);
+        }
+        const [res] = await db.query(`DELETE FROM evacuees WHERE ${predicate}`, params);
+        console.log(`    cleanup ok: e2e family households (${headIds.length} heads, ${res.affectedRows} rows, slots given back)`);
+      }
+    } catch (e) { console.log(`    cleanup skipped: e2e family households… (${String(e.message).slice(0, 55)})`); }
     // Activity logs referencing the test users (as actor or as the entity they
     // provisioned, e.g. DEMO_PROVISIONED) must go before users, or the FK on
     // actorId blocks the users delete.
@@ -634,6 +962,8 @@ async function finish(db, flow, provisioned, extraEmails = []) {
     } catch (e) { console.log(`    cleanup skipped: activity_logs by actor… (${e.message.slice(0, 55)})`); }
     const accountCleanup = [
       [`DELETE FROM auth_credentials WHERE email IN (${emails.map(() => "?").join(",")})`, emails],
+      // The §27 staff center assignment must go before the user row it references.
+      [`DELETE FROM centerStaff WHERE userId IN (${userIds.map(() => "?").join(",") || "NULL"})`, userIds],
       [`DELETE FROM evacuees WHERE userId IN (${userIds.map(() => "?").join(",") || "NULL"})`, userIds],
       [`DELETE FROM users WHERE email IN (${emails.map(() => "?").join(",")})`, emails],
     ];

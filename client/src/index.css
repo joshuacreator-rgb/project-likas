@@ -360,3 +360,26 @@ button { cursor:pointer; }
 
 /* Assignment dropdown — availability flagging (spec 3.7) */
 .assignment-hint{font-weight:500;color:#5b7d75;font-size:12px}
+
+/* Client §27 — family management in the staff Evacuees section */
+.registry-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.family-modal{width:min(720px,100%)}
+.family-details{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;border:1px solid #e5efec;border-radius:10px;padding:12px 14px;background:#f8fcfb;margin-top:14px}
+.family-details div{display:flex;flex-direction:column;gap:3px;min-width:0}
+.family-details span{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#8b9c98;font-weight:700}
+.family-details strong{font-size:13.5px;color:#173f3a;overflow-wrap:anywhere}
+.family-section-title{font-family:Manrope,sans-serif;font-size:14px;color:#234945;margin:18px 0 4px;letter-spacing:-.01em}
+.family-section-title-flush{margin-top:4px}
+.family-member-block{border-top:1px solid #e5efec;margin-top:16px;padding-top:4px}
+.family-member-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.family-member-row{border:1px solid #e5efec;border-radius:10px;padding:4px 12px 10px;margin-top:10px;background:#fff}
+.family-member-row-head{display:flex;align-items:center;justify-content:space-between;padding-top:8px}
+.family-member-row-head strong{font-size:13px;color:#234945}
+.family-member-row-head button{border:0;background:transparent;color:#8b9c98;cursor:pointer;display:grid;place-items:center;padding:4px;border-radius:6px}
+.family-member-row-head button:hover{background:#fdeeec;color:#b4453a}
+.family-member-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px 12px}
+.family-member-fields label{display:grid;gap:6px;margin-top:0;text-align:left}
+.family-member-fields input,.family-member-fields select{width:100%;min-height:36px}
+.family-confirm{border:1px solid #f0c9c2;background:#fdf4f2;border-radius:10px;padding:12px 14px;margin-top:14px;display:grid;gap:6px}
+.family-confirm p{margin:0;font-size:13.5px;color:#7a3b30;line-height:1.5}
+.family-confirm .modal-actions{margin-top:4px}
