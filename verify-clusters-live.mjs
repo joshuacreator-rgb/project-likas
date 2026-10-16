@@ -896,6 +896,7 @@ async function familyManagementCheck(browser, login) {
 async function incidentPrintCheck(browser, login) {
   const page = await browser.newPage();
   try {
+    await page.setViewport({ width: 1440, height: 900 });
     await login(page, ADMIN_EMAIL);
     await evalPoll(page,
       () => [...document.querySelectorAll(".side-nav button")].some(b => /Risk reports/.test(b.textContent ?? "")),
