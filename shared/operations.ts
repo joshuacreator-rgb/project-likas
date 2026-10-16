@@ -37,6 +37,8 @@ export type OperationalAlert = {
   targetAudience: AlertTargetAudience;
   isActive: boolean;
   createdAt: Date | string;
+  /** Set when the alert was raised for a specific incident report. */
+  reportId?: number | null;
 };
 
 /** Active alerts surfaced to a role: targeted audience plus public broadcasts. */
@@ -58,6 +60,73 @@ export function alertsVisibleToRole<T extends OperationalAlert>(
         alert.targetAudience === "ALL_USERS"
     );
   return list; // admins see everything
+}
+
+/**
+ * The assignment notification a responder receives (spec 4.1). It must carry
+ * the incident identity, the complainant, what happened, where, when it was
+ * reported, the current status, when it was assigned, and whether any
+ * attachments are waiting — everything needed to act without opening the
+ * incident first.
+ */
+export function describeAssignmentNotification(
+  report: {
+    id: number;
+    reportCode?: string | null;
+    description: string;
+    location: string;
+    complainantName?: string | null;
+    reportedAt?: Date | string | null;
+    status?: string | null;
+    latitude?: number | string | null;
+    longitude?: number | string | null;
+  },
+  options: { assignedAt: Date; attachmentCount: number }
+): string {
+  const code = report.reportCode || `Incident ${report.id}`;
+  const reportedAt = report.reportedAt
+    ? new Date(report.reportedAt).toLocaleString()
+    : "an unrecorded time";
+  const attachments =
+    options.attachmentCount > 0
+      ? ` ${options.attachmentCount} attachment${options.attachmentCount === 1 ? "" : "s"} on file — open the incident to view.`
+      : " No attachments on file.";
+  const coordinates =
+    report.latitude != null && report.longitude != null
+      ? ` Pin: https://www.google.com/maps/search/?api=1&query=${report.latitude},${report.longitude}`
+      : "";
+  return `${code} requires responder attention at ${report.location}: ${report.description}. Reporter: ${report.complainantName || "Unknown"}. Reported ${reportedAt}. Status: ${report.status || "IN_PROGRESS"}. Assigned ${options.assignedAt.toLocaleString()}.${attachments}${coordinates}`;
+}
+
+/**
+ * Registry search (spec 5.30): a household listing is searchable by any of the
+ * person's names, the linked account email, the household id, or the member id.
+ * An empty query matches everything so the box is optional.
+ */
+export function evacueeMatchesSearch(
+  row: {
+    id: number;
+    firstName: string;
+    middleName?: string | null;
+    lastName: string;
+    userEmail?: string | null;
+    householdId?: number | null;
+  },
+  query: string
+): boolean {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return true;
+  const haystack = [
+    row.firstName,
+    row.middleName ?? "",
+    row.lastName,
+    row.userEmail ?? "",
+    row.householdId ?? "",
+    row.id,
+  ]
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(normalized);
 }
 
 export function resolveNotificationDelivery(config: { emailConfigured?: boolean; smsConfigured?: boolean }) {

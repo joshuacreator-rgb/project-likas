@@ -61,7 +61,7 @@ import {
   getLoginPath,
   getRegisterPath,
 } from "../../../shared/roles";
-import { canTransitionReport, alertsVisibleToRole, compareNames, type ReportStatus } from "../../../shared/operations";
+import { canTransitionReport, alertsVisibleToRole, compareNames, evacueeMatchesSearch, type ReportStatus } from "../../../shared/operations";
 import {
   adviceCategories,
   adviceCategoryOrder,
@@ -245,6 +245,88 @@ function relativeTime(value: string | Date | undefined): string {
   const days = Math.floor(hours / 24);
   return `${days} day${days === 1 ? "" : "s"} ago`;
 }
+/**
+ * Confirmation step for the two terminal incident transitions (spec 4.3/4.4).
+ * The responder confirms the action and can attach optional remarks, which are
+ * stored on the report as its resolution note. Both the incident detail view
+ * and the reports list route through this dialog so neither can be a blind
+ * one-click state change.
+ */
+type ResolutionDialogState = {
+  mode: "RESOLVED" | "REJECTED";
+  reportId: number;
+  reportLabel: string;
+  remarks: string;
+};
+
+function ResolutionDialog({
+  state,
+  isPending,
+  onRemarksChange,
+  onCancel,
+  onConfirm,
+}: {
+  state: ResolutionDialogState;
+  isPending: boolean;
+  onRemarksChange: (remarks: string) => void;
+  onCancel: () => void;
+  onConfirm: (event: React.FormEvent<HTMLFormElement>) => void;
+}) {
+  const resolving = state.mode === "RESOLVED";
+  return (
+    <div className="modal-backdrop resolution-backdrop" onClick={onCancel}>
+      <form
+        className="report-modal resolution-dialog"
+        onClick={event => event.stopPropagation()}
+        onSubmit={onConfirm}
+      >
+        <div className="modal-title">
+          <div>
+            <span className="eyebrow">
+              {resolving ? "CONFIRM RESOLUTION" : "CONFIRM REJECTION"}
+            </span>
+            <h2>{resolving ? "Resolve this incident?" : "Reject this incident?"}</h2>
+          </div>
+          <button type="button" onClick={onCancel} aria-label="Cancel">
+            <X size={18} />
+          </button>
+        </div>
+        <p className="empty-copy">
+          {resolving
+            ? `${state.reportLabel} will be marked resolved and its linked alert will end.`
+            : `${state.reportLabel} will be marked rejected as invalid or duplicate.`}
+        </p>
+        <label>
+          {resolving ? "Resolution remarks (optional)" : "Rejection note (optional)"}
+          <textarea
+            className="resolution-remarks"
+            rows={4}
+            value={state.remarks}
+            onChange={event => onRemarksChange(event.target.value)}
+            placeholder={
+              resolving
+                ? "What was found and what was done at the scene?"
+                : "Why is this report being rejected?"
+            }
+          />
+        </label>
+        <div className="modal-actions">
+          <Button type="button" variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={isPending}>
+            {isPending
+              ? "Saving…"
+              : resolving
+                ? "Confirm resolved"
+                : "Confirm rejected"}
+          </Button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 const staticCentersStorageKey = "likas-static-centers";
 const staticResourcesStorageKey = "likas-static-resources";
 const staticReportsStorageKey = "likas-static-reports";
@@ -397,6 +479,18 @@ export default function Home() {
     { enabled: selectedIncidentReportId !== null && !isStaticSession() }
   );
   const utils = trpc.useUtils();
+  const [resolutionDialog, setResolutionDialog] =
+    useState<ResolutionDialogState | null>(null);
+  const resolveReportMutation = trpc.operations.updateRiskReport.useMutation({
+    onSuccess: () => {
+      utils.operations.reports.invalidate();
+      utils.operations.incidentTimeline.invalidate();
+      // Resolving or rejecting a report ends its linked alert, so refresh the
+      // alert center and the summary on the acting dashboard too.
+      utils.operations.alerts.invalidate();
+      utils.operations.summary.invalidate();
+    },
+  });
   const uploadEvidenceMutation = trpc.operations.uploadEvidence.useMutation({
     onSuccess: () => {
       utils.operations.reports.invalidate();
@@ -691,6 +785,37 @@ export default function Home() {
     notifyResponders.reset();
   }
 
+  /**
+   * Opening an incident from a notification (spec 4.2): assignment alerts
+   * carry the report id, so clicking the notification opens that incident's
+   * detail view instead of leaving the responder to hunt for it.
+   */
+  function openIncidentFromReportId(reportId: number) {
+    const report = (liveReports ?? []).find(item => item.id === reportId);
+    if (!report) return;
+    openIncident(
+      {
+        id: report.reportCode,
+        type: report.reportType,
+        location: report.location,
+        priority: report.priority,
+        time: report.createdAt ? relativeTime(report.createdAt) : "recently",
+        color:
+          report.priority === "CRITICAL"
+            ? "rose"
+            : report.priority === "HIGH"
+              ? "amber"
+              : "blue",
+        reportId: report.id,
+        status: report.status,
+        createdAt: report.createdAt,
+        resolution: report.resolution ?? null,
+        assignedResponderId: report.assignedResponderId ?? null,
+      },
+      report.id
+    );
+  }
+
   function handleNotifyResponders() {
     if (!selectedIncident || notifyResponders.isPending) return;
     if (sessionStorage.getItem("likas-static-demo-role")) {
@@ -703,6 +828,42 @@ export default function Home() {
       location: selectedIncident.location,
       priority: selectedIncident.priority as "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
     });
+  }
+
+  /** Confirm + save flow for the resolution dialog (spec 4.3/4.4). */
+  function submitResolution(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!resolutionDialog) return;
+    const { mode, reportId, remarks } = resolutionDialog;
+    setResolutionDialog(null);
+    if (isStaticSession()) {
+      const reports = JSON.parse(
+        localStorage.getItem("likas-static-reports") || "[]"
+      );
+      localStorage.setItem(
+        "likas-static-reports",
+        JSON.stringify(
+          reports.map((report: any) =>
+            report.id === reportId
+              ? {
+                  ...report,
+                  status: mode,
+                  resolution: remarks.trim() || report.resolution,
+                }
+              : report
+          )
+        )
+      );
+      window.dispatchEvent(new Event("likas-static-reports-changed"));
+      toast(mode === "REJECTED" ? "Incident rejected." : "Incident resolved.");
+      return;
+    }
+    resolveReportMutation.mutate({
+      reportId,
+      status: mode,
+      resolution: remarks.trim() || undefined,
+    });
+    toast(mode === "REJECTED" ? "Incident rejected." : "Incident resolved.");
   }
 
   async function submitReport() {
@@ -750,6 +911,17 @@ export default function Home() {
 
   if (isCitizen) return <CitizenHome />;
   const dashboardRole = user?.role ?? "admin";
+  // Spec 4.3/4.4: who may act on this incident, and which transitions are
+  // currently legal for its status.
+  const incidentStatus = (incidentTimeline?.report?.status ??
+    selectedIncident?.status ??
+    "PENDING") as ReportStatus;
+  const canActOnIncident =
+    isAdmin ||
+    (isResponder &&
+      user?.id ===
+        (incidentTimeline?.report?.assignedResponderId ??
+          selectedIncident?.assignedResponderId));
   return (
     <div className={`likas-app internal-shell ${dashboardRole}-shell ${largeText ? "large-text" : ""}`}>
       <RoleOnboarding role={user?.role} />
@@ -1025,7 +1197,13 @@ export default function Home() {
               <div className="metric-icon teal"><Users size={18} /></div>
               <span>Registered evacuees</span>
               <strong>{liveSummary?.evacuees ?? 0}</strong>
-              <small>Total households: {liveSummary?.households ?? 0}</small>
+              <small>People in the registry</small>
+            </button>
+            <button type="button" className="metric-card" onClick={() => { setEvacueeStatusFilter("ALL"); setActive("Evacuees"); }}>
+              <div className="metric-icon blue"><Users size={18} /></div>
+              <span>Total households</span>
+              <strong>{liveSummary?.households ?? 0}</strong>
+              <small>Distinct households registered</small>
             </button>
             <button type="button" className="metric-card" onClick={() => { setEvacueeStatusFilter("PENDING"); setActive("Evacuees"); }}>
               <div className="metric-icon amber"><Users size={18} /></div>
@@ -1429,18 +1607,47 @@ export default function Home() {
                 <span className="alert-count">{alertsForRole.length} active</span>
               </div>
               <div className="alert-list">
-                {alertsForRole.slice(0, 5).map(alert => (
-                  <div className={`alert-item${alert.priority === "CRITICAL" || alert.priority === "HIGH" ? " critical" : ""}`} key={alert.id}>
-                    <div className="alert-symbol">
-                      <AlertTriangle size={17} />
+                {alertsForRole.slice(0, 5).map(alert => {
+                  // Spec 4.2: a notification raised for an incident opens that
+                  // incident's detail view when it is clicked.
+                  const linkedReportId = alert.reportId ?? null;
+                  const canOpen =
+                    linkedReportId !== null &&
+                    (liveReports ?? []).some(report => report.id === linkedReportId);
+                  return (
+                    <div
+                      className={`alert-item${alert.priority === "CRITICAL" || alert.priority === "HIGH" ? " critical" : ""}${canOpen ? " alert-open" : ""}`}
+                      key={alert.id}
+                      role={canOpen ? "button" : undefined}
+                      tabIndex={canOpen ? 0 : undefined}
+                      onClick={canOpen ? () => openIncidentFromReportId(linkedReportId) : undefined}
+                      onKeyDown={
+                        canOpen
+                          ? event => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                openIncidentFromReportId(linkedReportId);
+                              }
+                            }
+                          : undefined
+                      }
+                    >
+                      <div className="alert-symbol">
+                        <AlertTriangle size={17} />
+                      </div>
+                      <div>
+                        <strong>{alert.title}</strong>
+                        <p>{alert.message}</p>
+                        <small>{new Date(alert.createdAt).toLocaleString()}</small>
+                        {canOpen && (
+                          <span className="alert-open-hint">
+                            Open incident <ChevronRight size={13} />
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div>
-                      <strong>{alert.title}</strong>
-                      <p>{alert.message}</p>
-                      <small>{new Date(alert.createdAt).toLocaleString()}</small>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
                 {alertsForRole.length === 0 && (
                   <div className="alert-item">
                     <div className="alert-symbol">
@@ -1502,6 +1709,8 @@ export default function Home() {
                 <X size={18} />
               </button>
             </div>
+            <div className="incident-detail-panels">
+              <div className="incident-detail-main">
             <div className="incident-detail-grid">
               <div><small>Reference</small><strong>{selectedIncident.id}</strong></div>
               <div><small>Priority</small><strong className={`incident-detail-priority ${selectedIncident.color}`}>{selectedIncident.priority}</strong></div>
@@ -1537,7 +1746,7 @@ export default function Home() {
                 {incidentTimeline?.report.rejectedAt && <div className="incident-timeline-event"><span className="incident-timeline-dot" /><div><strong>Rejected</strong><small>{new Date(incidentTimeline.report.rejectedAt).toLocaleString()}</small><p>Incident marked rejected.</p></div></div>}
                 {incidentTimeline?.report.assignedResponderId && <div className="incident-timeline-event"><span className="incident-timeline-dot" /><div><strong>Responder assigned</strong><small>Assignment recorded</small><p>The incident is assigned to the response team.</p></div></div>}
                 {incidentTimeline?.actions.map(action => <div className="incident-timeline-event" key={action.id}><span className="incident-timeline-dot" /><div><strong>{action.action}</strong><small>{new Date(action.createdAt).toLocaleString()}</small>{action.resourcesUsed && <p>Resources used: {action.resourcesUsed}</p>}{action.arrivalAt && <p>Arrived: {new Date(action.arrivalAt).toLocaleString()}</p>}{action.completedAt && <p>Completed: {new Date(action.completedAt).toLocaleString()}</p>}</div></div>)}
-                {selectedIncident.status === "RESOLVED" && <div className="incident-timeline-event"><span className="incident-timeline-dot complete" /><div><strong>Incident resolved</strong><small>Resolution recorded</small>{selectedIncident.resolution && <p>{selectedIncident.resolution}</p>}</div></div>}
+                {(selectedIncident.status === "RESOLVED" || selectedIncident.status === "REJECTED") && <div className="incident-timeline-event"><span className={`incident-timeline-dot${selectedIncident.status === "RESOLVED" ? " complete" : ""}`} /><div><strong>{selectedIncident.status === "RESOLVED" ? "Incident resolved" : "Incident rejected"}</strong><small>{selectedIncident.status === "RESOLVED" ? "Resolution recorded" : "Rejection recorded"}</small>{(incidentTimeline?.report?.resolution ?? selectedIncident.resolution) && <p>{incidentTimeline?.report?.resolution ?? selectedIncident.resolution}</p>}</div></div>}
               </div>
             </div>
             <div className="incident-evidence">
@@ -1594,6 +1803,60 @@ export default function Home() {
                 </ul>
               )}
             </div>
+              </div>
+              <div className="incident-detail-side">
+                <div className="incident-map-block">
+                  <span className="eyebrow">LOCATION</span>
+                  {incidentTimeline?.report?.latitude != null &&
+                  incidentTimeline?.report?.longitude != null ? (
+                    <div className="incident-map-frame">
+                      <MapContainer
+                        className="incident-map-canvas"
+                        center={[
+                          Number(incidentTimeline.report.latitude),
+                          Number(incidentTimeline.report.longitude),
+                        ]}
+                        zoom={15}
+                        scrollWheelZoom={false}
+                      >
+                        <TileLayer
+                          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                        />
+                        <CircleMarker
+                          center={[
+                            Number(incidentTimeline.report.latitude),
+                            Number(incidentTimeline.report.longitude),
+                          ]}
+                          radius={9}
+                          pathOptions={{ color: "#d1493f", fillColor: "#d1493f", fillOpacity: 0.9 }}
+                        >
+                          <Popup>{selectedIncident.location}</Popup>
+                        </CircleMarker>
+                      </MapContainer>
+                    </div>
+                  ) : (
+                    <p className="empty-copy">
+                      {incidentTimelineLoading
+                        ? "Loading coordinates…"
+                        : "No coordinates were recorded for this report."}
+                    </p>
+                  )}
+                  <div className="incident-location-info">
+                    <small>Address</small>
+                    <strong>{selectedIncident.location}</strong>
+                    {incidentTimeline?.report?.latitude != null &&
+                      incidentTimeline?.report?.longitude != null && (
+                        <a
+                          href={`https://www.google.com/maps/search/?api=1&query=${incidentTimeline.report.latitude},${incidentTimeline.report.longitude}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <MapPin size={14} /> Open in Google Maps
+                        </a>
+                      )}
+                  </div>
+                </div>
             <div className="incident-assignment">
               <div className="incident-assignment-head">
                 <span className="eyebrow">RESPONDER ASSIGNMENT</span>
@@ -1684,6 +1947,45 @@ export default function Home() {
                 )
               )}
             </div>
+            {canActOnIncident && (
+              <div className="incident-side-buttons">
+                {canTransitionReport(incidentStatus, "RESOLVED") && (
+                  <Button
+                    type="button"
+                    onClick={() =>
+                      setResolutionDialog({
+                        mode: "RESOLVED",
+                        reportId:
+                          selectedIncident.reportId ?? selectedIncidentReportId ?? 0,
+                        reportLabel: selectedIncident.id,
+                        remarks: "",
+                      })
+                    }
+                    disabled={resolveReportMutation.isPending}
+                  >
+                    <CheckCircle2 size={15} /> Resolve incident
+                  </Button>
+                )}
+                {canTransitionReport(incidentStatus, "REJECTED") && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() =>
+                      setResolutionDialog({
+                        mode: "REJECTED",
+                        reportId:
+                          selectedIncident.reportId ?? selectedIncidentReportId ?? 0,
+                        reportLabel: selectedIncident.id,
+                        remarks: "",
+                      })
+                    }
+                    disabled={resolveReportMutation.isPending}
+                  >
+                    <XCircle size={15} /> Reject incident
+                  </Button>
+                )}
+              </div>
+            )}
             {(isAdmin || isStaff) &&
               (responderNotified ? (
                 <div className="incident-notified" role="status">
@@ -1702,6 +2004,19 @@ export default function Home() {
                 </Button>
               ))}
             {notifyResponders.error && <p className="login-error" role="alert">{notifyResponders.error.message}</p>}
+              </div>
+            </div>
+            {resolutionDialog && (
+              <ResolutionDialog
+                state={resolutionDialog}
+                isPending={resolveReportMutation.isPending}
+                onRemarksChange={remarks =>
+                  setResolutionDialog({ ...resolutionDialog, remarks })
+                }
+                onCancel={() => setResolutionDialog(null)}
+                onConfirm={submitResolution}
+              />
+            )}
           </div>
         </div>
       )}
@@ -1904,8 +2219,9 @@ function WorkspaceView({
     refetchInterval: active === "Evacuees" ? 1500 : false,
   });
   const [selectedHouseholdId, setSelectedHouseholdId] = useState<number | null>(null);
+  const [registrySearch, setRegistrySearch] = useState("");
   const [householdNewMemberOpen, setHouseholdNewMemberOpen] = useState(false);
-  const [householdMemberForm, setHouseholdMemberForm] = useState<{ firstName: string; middleName: string; lastName: string; age: number; centerId: number }>({ firstName: "", middleName: "", lastName: "", age: 18, centerId: 0 });
+  const [householdMemberForm, setHouseholdMemberForm] = useState<{ householdId: number; centerId: number; headLabel: string; firstName: string; middleName: string; lastName: string; age: string; sex: "UNSPECIFIED" | "FEMALE" | "MALE" | "OTHER"; relationship: string }>({ householdId: 0, centerId: 0, headLabel: "", firstName: "", middleName: "", lastName: "", age: "18", sex: "UNSPECIFIED", relationship: "Member" });
   const { data: adviceItems } = trpc.advice.adminList.useQuery(undefined, {
     enabled: active === "Safety advice" && user?.role === "admin" && !isStaticSession(),
   });
@@ -2063,6 +2379,7 @@ function WorkspaceView({
   const updateRiskReportMutation = trpc.operations.updateRiskReport.useMutation({
     onSuccess: () => {
       utils.operations.reports.invalidate();
+      utils.operations.incidentTimeline.invalidate();
       // Marking a report done ends its linked alert. Refresh the alert center
       // and the summary on the acting dashboard too, not just on dashboards
       // that happen to receive the ended-alert push (backlog §25).
@@ -2093,40 +2410,75 @@ function WorkspaceView({
     secret: string;
     otpauthUrl: string;
   } | null>(null);
-  function markIncidentDone(reportId: number) {
-    if (isStaticSession()) {
-      const nextReports = (incidentReports ?? []).map(report =>
-        report.id === reportId ? { ...report, status: "RESOLVED" } : report
-      );
-      window.localStorage.setItem("likas-static-reports", JSON.stringify(nextReports));
-      window.dispatchEvent(new Event("likas-static-reports-changed"));
-      return;
-    }
-    updateRiskReportMutation.mutate({ reportId, status: "RESOLVED" });
+  const [resolutionDialog, setResolutionDialog] =
+    useState<ResolutionDialogState | null>(null);
+  /**
+   * Spec 4.3/4.4: resolving and rejecting are two-step actions — a
+   * confirmation dialog first, with optional remarks saved to the report.
+   */
+  function requestResolution(
+    mode: "RESOLVED" | "REJECTED",
+    reportId: number,
+    reportLabel: string
+  ) {
+    setResolutionDialog({ mode, reportId, reportLabel, remarks: "" });
   }
-  function markIncidentRejected(reportId: number) {
+  function submitResolution(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!resolutionDialog) return;
+    const { mode, reportId, remarks } = resolutionDialog;
+    setResolutionDialog(null);
     if (isStaticSession()) {
-      const note = window.prompt("Optional rejection note");
       const nextReports = (incidentReports ?? []).map(report =>
         report.id === reportId
           ? {
               ...report,
-              status: "REJECTED",
-              resolution: note?.trim() || report.resolution,
+              status: mode,
+              resolution: remarks.trim() || report.resolution,
             }
           : report
       );
       window.localStorage.setItem("likas-static-reports", JSON.stringify(nextReports));
       window.dispatchEvent(new Event("likas-static-reports-changed"));
+      toast(mode === "REJECTED" ? "Incident rejected." : "Incident resolved.");
       return;
     }
-    if (!window.confirm("Reject this incident report?")) return;
-    const note = window.prompt("Optional rejection note");
     updateRiskReportMutation.mutate({
       reportId,
-      status: "REJECTED",
-      resolution: note?.trim() || undefined,
+      status: mode,
+      resolution: remarks.trim() || undefined,
     });
+    toast(mode === "REJECTED" ? "Incident rejected." : "Incident resolved.");
+  }
+  /**
+   * Spec 4.2: a notification raised for an incident opens that incident's
+   * detail view from the alerts list, same as from the alert center.
+   */
+  function openIncidentFromAlert(reportId: number | null) {
+    if (reportId == null) return;
+    const report = (incidentReports ?? []).find(item => item.id === reportId);
+    if (!report) return;
+    onOpenIncident?.(
+      {
+        id: report.reportCode,
+        type: report.reportType,
+        location: report.location,
+        priority: report.priority,
+        time: report.createdAt ? new Date(report.createdAt).toLocaleString() : "—",
+        color:
+          report.priority === "CRITICAL"
+            ? "rose"
+            : report.priority === "HIGH"
+              ? "amber"
+              : "blue",
+        reportId: report.id,
+        status: report.status,
+        createdAt: report.createdAt,
+        resolution: report.resolution,
+        assignedResponderId: report.assignedResponderId ?? null,
+      },
+      report.id
+    );
   }
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteName, setInviteName] = useState("");
@@ -2263,6 +2615,7 @@ function WorkspaceView({
   const registerEvacueeMutation = trpc.operations.registerEvacuee.useMutation({
     onSuccess: () => {
       setRecordOpen(false);
+      setHouseholdNewMemberOpen(false);
       utils.operations.evacuees.invalidate();
       utils.operations.summary.invalidate();
       utils.operations.centers.invalidate();
@@ -2293,6 +2646,26 @@ function WorkspaceView({
       toast("Household updated.");
     },
   });
+  /** Adds a member to a household through the modal form (spec 5.17). */
+  function submitHouseholdMember(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const age = Number(householdMemberForm.age);
+    if (!Number.isFinite(age) || age < 0 || age > 120) {
+      toast("A valid age between 0 and 120 is required.");
+      return;
+    }
+    registerEvacueeMutation.mutate({
+      firstName: householdMemberForm.firstName.trim(),
+      middleName: householdMemberForm.middleName.trim() || undefined,
+      lastName: householdMemberForm.lastName.trim(),
+      age,
+      sex: householdMemberForm.sex,
+      centerId:
+        householdMemberForm.centerId || centerOptions[0]?.id || 1,
+      householdId: householdMemberForm.householdId,
+      relationshipToHead: householdMemberForm.relationship.trim() || "Member",
+    });
+  }
   const endAlertMutation = trpc.admin.endAlert.useMutation({
     onSuccess: () => {
       utils.operations.alerts.invalidate();
@@ -2538,7 +2911,7 @@ function WorkspaceView({
     ADMIN: "Admins only",
   };
   const alertMessages = active === "Alerts" && workspaceAlerts !== undefined
-    ? workspaceAlertsForRole.map(alert => ({ alertType: alert.alertType, message: alert.message }))
+    ? workspaceAlertsForRole.map(alert => ({ alertType: alert.alertType, message: alert.message, reportId: alert.reportId ?? null }))
     : [];
   const centerNameById = new Map((centers ?? []).map(center => [center.id, center.name]));
   const centerOptions = (centers ?? []).filter(center => center.status === "OPEN" && center.currentOccupancy < center.maximumCapacity);
@@ -2645,10 +3018,15 @@ function WorkspaceView({
   if (active === "Evacuees") {
     const headCandidates = (evacuees ?? [])
       .filter(candidate => (candidate.householdId ?? candidate.id) === candidate.id)
+      .filter(candidate => evacueeMatchesSearch(candidate, registrySearch))
       .sort(compareNames as any);
     const selectedHead = headCandidates.find(candidate => candidate.id === selectedHouseholdId) ?? headCandidates[0] ?? null;
+    const headRowId = selectedHead ? selectedHead.id : 0;
     const members = selectedHead
-      ? (evacuees ?? []).filter(candidate => candidate.householdId === selectedHead.householdId).sort(compareNames as any)
+      ? (evacuees ?? [])
+          .filter(candidate => candidate.householdId === headRowId || candidate.id === headRowId)
+          .filter(candidate => evacueeMatchesSearch(candidate, registrySearch))
+          .sort(compareNames as any)
       : [];
     return (
       <section className="workspace-view panel">
@@ -2656,35 +3034,42 @@ function WorkspaceView({
           <div><span className="eyebrow">PEOPLE REGISTRY</span><h2>Evacuees and households</h2><p>Manage residents and their household membership.</p>
             {evacueeStatusFilter !== "ALL" && <p className="empty-copy">Filtered by {evacueeStatusFilter === "PENDING" ? "pending placement" : evacueeStatusFilter}. <button type="button" className="incident-timeline-button" onClick={() => setEvacueeStatusFilter("ALL")}>Clear filter</button></p>}
           </div>
+          <div className="registry-search">
+            <Search size={15} />
+            <Input
+              value={registrySearch}
+              onChange={event => setRegistrySearch(event.target.value)}
+              placeholder="Search name, email, or household ID"
+              aria-label="Search the registry"
+            />
+          </div>
         </div>
         <div className="workspace-table-wrap">
           <table className="workspace-table workspace-user-table">
-            <thead><tr><th>Head of household</th><th>Members</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Head of household</th><th>Account</th><th>Members</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
-              {headCandidates.length === 0 && <tr><td colSpan={4}><span className="empty-copy">No household heads registered.</span></td></tr>}
+              {headCandidates.length === 0 && <tr><td colSpan={5}><span className="empty-copy">{registrySearch ? "No household heads match this search." : "No household heads registered."}</span></td></tr>}
               {headCandidates.map(head => (
                 <tr key={head.id}>
                   <td>{head.lastName}, {head.firstName}{head.middleName ? ` ${head.middleName}` : ""}</td>
+                  <td>{head.userEmail ?? <span className="empty-copy">Walk-in registry</span>}</td>
                   <td>{(evacuees ?? []).filter(candidate => candidate.householdId === (head.householdId ?? head.id)).length}</td>
                   <td>{head.status}</td>
                   <td>
                     <Button type="button" variant="outline" onClick={() => setSelectedHouseholdId(head.id)}>Manage family</Button>
                     <Button type="button" variant="outline" onClick={() => {
-                      const value = window.prompt("Full name (Last, First Middle):");
-                      if (!value) return;
-                      const nameParts = value.split(",").map(part => part.trim()).filter(Boolean);
-                      const born = window.prompt("Age:");
-                      const age = Number(born);
-                      if (!Number.isFinite(age)) { window.alert("A valid age is required."); return; }
-                      registerEvacueeMutation.mutate({
-                        firstName: nameParts[1]?.split(/\s+/)[0] || "Unknown",
-                        middleName: nameParts[1]?.split(/\s+/).slice(1).join(" ") || undefined,
-                        lastName: nameParts[0] || "Unknown",
-                        age,
-                        sex: "UNSPECIFIED",
-                        centerId: head.centerId != null ? head.centerId : (centerOptions[0]?.id ?? 1),
+                      setHouseholdMemberForm({
                         householdId: head.householdId ?? head.id,
+                        centerId: head.centerId ?? (centerOptions[0]?.id ?? 1),
+                        headLabel: `${head.lastName}, ${head.firstName}`,
+                        firstName: "",
+                        middleName: "",
+                        lastName: "",
+                        age: "18",
+                        sex: "UNSPECIFIED",
+                        relationship: "Member",
                       });
+                      setHouseholdNewMemberOpen(true);
                     }}>Add member</Button>
                   </td>
                 </tr>
@@ -2696,22 +3081,24 @@ function WorkspaceView({
           <div className="workspace-table-wrap">
             <h3>Family members of {selectedHead.lastName}, {selectedHead.firstName}</h3>
             <table className="workspace-table workspace-user-table">
-              <thead><tr><th>Member ID</th><th>Full name</th><th>Age</th><th>Status</th><th>Actions</th></tr></thead>
+              <thead><tr><th>Member ID</th><th>Full name</th><th>Age</th><th>Relationship to head</th><th>Registration status</th><th>Actions</th></tr></thead>
               <tbody>
-                {members.find(member => member.id === (selectedHead.householdId ?? selectedHead.id)) && <tr key={selectedHead.id}>
+                {members.find(member => member.id === headRowId) && <tr key={selectedHead.id}>
                   <td>{selectedHead.id}</td>
                   <td>{selectedHead.lastName}, {selectedHead.firstName}{selectedHead.middleName ? ` ${selectedHead.middleName}` : ""}</td>
                   <td>{selectedHead.age}</td>
-                  <td>HEAD</td>
+                  <td>Head of Household</td>
+                  <td>{selectedHead.status}</td>
                   <td>-</td>
                 </tr>}
-                {members.filter(member => member.id !== (selectedHead.householdId ?? selectedHead.id)).map(member => (
+                {members.filter(member => member.id !== headRowId).map(member => (
                   <tr key={member.id}>
                     <td>{member.id}</td>
                     <td>{member.lastName}, {member.firstName}{member.middleName ? ` ${member.middleName}` : ""}</td>
                     <td>{member.age}</td>
+                    <td>{member.relationshipToHead ?? "Member"}</td>
                     <td>{member.status}</td>
-                    <td><Button type="button" variant="outline" disabled={releaseEvacueeMutation.isPending} onClick={() => {
+                    <td><Button type="button" variant="outline" disabled={assignEvacueeHouseholdMutation.isPending} onClick={() => {
                       if (!window.confirm(`Remove ${member.firstName} ${member.lastName} from this household?`)) return;
                       assignEvacueeHouseholdMutation.mutate({ evacueeId: member.id, householdId: null });
                     }}>Remove member</Button></td>
@@ -2719,6 +3106,28 @@ function WorkspaceView({
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+        {householdNewMemberOpen && (
+          <div className="modal-backdrop" onClick={() => setHouseholdNewMemberOpen(false)}>
+            <form className="report-modal member-modal" onClick={event => event.stopPropagation()} onSubmit={submitHouseholdMember}>
+              <div className="modal-title">
+                <div><span className="eyebrow">HOUSEHOLD REGISTRY</span><h2>Add member</h2></div>
+                <button type="button" onClick={() => setHouseholdNewMemberOpen(false)} aria-label="Cancel adding a member"><X size={18} /></button>
+              </div>
+              <p className="empty-copy">Adding to the household of {householdMemberForm.headLabel}.</p>
+              <label>Last name<Input value={householdMemberForm.lastName} onChange={event => setHouseholdMemberForm({ ...householdMemberForm, lastName: event.target.value })} placeholder="Dela Cruz" required /></label>
+              <label>First name<Input value={householdMemberForm.firstName} onChange={event => setHouseholdMemberForm({ ...householdMemberForm, firstName: event.target.value })} placeholder="Juan" required /></label>
+              <label>Middle name (optional)<Input value={householdMemberForm.middleName} onChange={event => setHouseholdMemberForm({ ...householdMemberForm, middleName: event.target.value })} placeholder="Santos" /></label>
+              <label>Age<Input type="number" min={0} max={120} value={householdMemberForm.age} onChange={event => setHouseholdMemberForm({ ...householdMemberForm, age: event.target.value })} required /></label>
+              <label>Sex<select className="role-select" value={householdMemberForm.sex} onChange={event => setHouseholdMemberForm({ ...householdMemberForm, sex: event.target.value as typeof householdMemberForm.sex })}><option value="UNSPECIFIED">Unspecified</option><option value="FEMALE">Female</option><option value="MALE">Male</option><option value="OTHER">Other</option></select></label>
+              <label>Relationship to head<Input list="household-relationships" value={householdMemberForm.relationship} onChange={event => setHouseholdMemberForm({ ...householdMemberForm, relationship: event.target.value })} placeholder="Spouse, Child, Parent…" required /><datalist id="household-relationships"><option value="Spouse" /><option value="Child" /><option value="Parent" /><option value="Sibling" /><option value="Grandparent" /><option value="Other relative" /></datalist></label>
+              {registerEvacueeMutation.error && <div className="login-error" role="alert">{registerEvacueeMutation.error.message}</div>}
+              <div className="modal-actions">
+                <Button type="button" variant="outline" onClick={() => setHouseholdNewMemberOpen(false)}>Cancel</Button>
+                <Button type="submit" disabled={registerEvacueeMutation.isPending}>{registerEvacueeMutation.isPending ? "Adding…" : "Add member"}</Button>
+              </div>
+            </form>
           </div>
         )}
       </section>
@@ -3219,6 +3628,17 @@ function WorkspaceView({
             </p>
           )}
         </div>
+        {resolutionDialog && (
+          <ResolutionDialog
+            state={resolutionDialog}
+            isPending={updateRiskReportMutation.isPending}
+            onRemarksChange={remarks =>
+              setResolutionDialog({ ...resolutionDialog, remarks })
+            }
+            onCancel={() => setResolutionDialog(null)}
+            onConfirm={submitResolution}
+          />
+        )}
         {rolePrompt && (
           <div className="modal-backdrop" onClick={() => setRolePrompt(null)}>
             <form className="report-modal" onClick={event => event.stopPropagation()} onSubmit={event => {
@@ -3297,7 +3717,7 @@ function WorkspaceView({
                 <button type="button" className="incident-timeline-button" onClick={() => onOpenIncident?.({ id: report.reportCode, type: report.reportType, location: report.location, priority: report.priority, time: "Live report", color: report.priority === "CRITICAL" ? "rose" : report.priority === "HIGH" ? "amber" : "blue", reportId: report.id, status: report.status, createdAt: report.createdAt, resolution: report.resolution, assignedResponderId: report.assignedResponderId ?? null }, report.id)}>View incident timeline <ChevronRight size={14} /></button>
                 <div className="responder-incident-actions">
                   {report.latitude != null && report.longitude != null ? <a href={`https://www.google.com/maps/dir/?api=1&destination=${report.latitude},${report.longitude}`} target="_blank" rel="noreferrer"><MapPin size={14} /> Go there</a> : <small>Exact coordinates are not available for this report.</small>}
-                  {report.status === "RESOLVED" ? <small><CheckCircle2 size={14} /> Done</small> : (user?.role === "responder" || user?.role === "admin") && canTransitionReport(report.status as ReportStatus, "RESOLVED") && <Button type="button" variant="outline" onClick={() => markIncidentDone(report.id)} disabled={updateRiskReportMutation.isPending}><CheckCircle2 size={14} /> Mark done</Button>}
+                  {report.status === "RESOLVED" ? <small><CheckCircle2 size={14} /> Done</small> : (user?.role === "responder" || user?.role === "admin") && canTransitionReport(report.status as ReportStatus, "RESOLVED") && <Button type="button" variant="outline" onClick={() => requestResolution("RESOLVED", report.id, report.reportCode)} disabled={updateRiskReportMutation.isPending}><CheckCircle2 size={14} /> Mark done</Button>}
                 </div>
               </article>
             ))}
@@ -3527,12 +3947,12 @@ function WorkspaceView({
                       ))}
                     </select>
                     {canTransitionReport(report.status as ReportStatus, "RESOLVED") && (
-                      <Button type="button" variant="outline" onClick={() => markIncidentDone(report.id)} disabled={updateRiskReportMutation.isPending}>
+                      <Button type="button" variant="outline" onClick={() => requestResolution("RESOLVED", report.id, report.reportCode)} disabled={updateRiskReportMutation.isPending}>
                         <CheckCircle2 size={14} /> Mark done
                       </Button>
                     )}
                     {canTransitionReport(report.status as ReportStatus, "REJECTED") && (
-                      <Button type="button" variant="outline" onClick={() => markIncidentRejected(report.id)} disabled={updateRiskReportMutation.isPending}>
+                      <Button type="button" variant="outline" onClick={() => requestResolution("REJECTED", report.id, report.reportCode)} disabled={updateRiskReportMutation.isPending}>
                         <XCircle size={14} /> Reject
                       </Button>
                     )}
@@ -3584,11 +4004,37 @@ function WorkspaceView({
                 {row.map((cell, cellIndex) => (
                   <td key={cell}>
                     {active === "Alerts" && cellIndex === 0 && alertMessages[index] ? (
-                      <div className="alert-table-cell">
-                        <strong>{cell}</strong>
-                        <span className="alert-table-tag">{alertMessages[index].alertType}</span>
-                        <p>{alertMessages[index].message}</p>
-                      </div>
+                      (() => {
+                        const alertReportId = alertMessages[index].reportId;
+                        const canOpenAlert =
+                          alertReportId != null &&
+                          (incidentReports ?? []).some(report => report.id === alertReportId);
+                        return (
+                          <div
+                            className={`alert-table-cell${canOpenAlert ? " alert-open" : ""}`}
+                            role={canOpenAlert ? "button" : undefined}
+                            tabIndex={canOpenAlert ? 0 : undefined}
+                            onClick={canOpenAlert ? () => openIncidentFromAlert(alertReportId) : undefined}
+                            onKeyDown={
+                              canOpenAlert
+                                ? event => {
+                                    if (event.key === "Enter" || event.key === " ") {
+                                      event.preventDefault();
+                                      openIncidentFromAlert(alertReportId);
+                                    }
+                                  }
+                                : undefined
+                            }
+                          >
+                            <strong>{cell}</strong>
+                            <span className="alert-table-tag">{alertMessages[index].alertType}</span>
+                            <p>{alertMessages[index].message}</p>
+                            {canOpenAlert && (
+                              <span className="alert-open-hint">Open incident <ChevronRight size={13} /></span>
+                            )}
+                          </div>
+                        );
+                      })()
                     ) : active === "Risk reports" && cellIndex === 2 && reportDestinations[index] ? (
                       <a href={reportDestinations[index]} target="_blank" rel="noreferrer" className="table-location-link">{cell} <MapIcon size={13} /></a>
                     ) : (

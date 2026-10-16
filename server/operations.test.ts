@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alertsVisibleToRole, calculateCenterMetrics, canTransitionReport, getResourceStatus, resolveNotificationDelivery } from "../shared/operations";
+import { alertsVisibleToRole, calculateCenterMetrics, canTransitionReport, describeAssignmentNotification, evacueeMatchesSearch, getResourceStatus, resolveNotificationDelivery } from "../shared/operations";
 
 describe("Project Likas operational rules", () => {
   it("prevents registration at a full center and calculates its occupancy", () => {
@@ -73,5 +73,74 @@ describe("Project Likas operational rules", () => {
   it("falls back to in-app delivery when providers are not configured", () => {
     expect(resolveNotificationDelivery({})).toEqual({ channels: ["IN_APP"], fallback: true });
     expect(resolveNotificationDelivery({ emailConfigured: true, smsConfigured: true })).toEqual({ channels: ["EMAIL", "SMS"], fallback: false });
+  });
+});
+
+describe("Responder assignment notification (spec 4.1)", () => {
+  const report = {
+    id: 12,
+    reportCode: "RPT-0012",
+    description: "Flooding near the bridge",
+    location: "J.P. Rizal St, Pateros",
+    complainantName: "Maria Santos",
+    reportedAt: new Date("2026-10-16T08:30:00+08:00"),
+    status: "IN_PROGRESS",
+    latitude: 14.5501,
+    longitude: 121.0647,
+  };
+
+  it("carries the incident, complainant, status, assigned time and attachments", () => {
+    const message = describeAssignmentNotification(report, { assignedAt: new Date("2026-10-16T09:00:00+08:00"), attachmentCount: 2 });
+
+    expect(message).toContain("RPT-0012");
+    expect(message).toContain("J.P. Rizal St, Pateros");
+    expect(message).toContain("Flooding near the bridge");
+    expect(message).toContain("Maria Santos");
+    expect(message).toContain("Status: IN_PROGRESS");
+    expect(message).toContain("Assigned");
+    expect(message).toContain("2 attachments on file");
+    expect(message).toContain("google.com/maps");
+  });
+
+  it("says so plainly when there are no attachments or coordinates", () => {
+    const message = describeAssignmentNotification(
+      { ...report, reportCode: null, complainantName: null, latitude: null, longitude: null, reportedAt: null },
+      { assignedAt: new Date("2026-10-16T09:00:00+08:00"), attachmentCount: 0 }
+    );
+
+    expect(message).toContain("Incident 12");
+    expect(message).toContain("Reporter: Unknown");
+    expect(message).toContain("No attachments on file");
+    expect(message).not.toContain("google.com/maps");
+  });
+
+  it("uses the singular for exactly one attachment", () => {
+    const message = describeAssignmentNotification(report, { assignedAt: new Date("2026-10-16T09:00:00+08:00"), attachmentCount: 1 });
+    expect(message).toContain("1 attachment on file");
+  });
+});
+
+describe("Registry search (spec 5.30)", () => {
+  const row = { id: 7, firstName: "Angela Marie", middleName: "Cruz", lastName: "Dela Cruz", userEmail: "angela@gmail.com", householdId: 41 };
+
+  it("matches by name, account email, household id or member id", () => {
+    expect(evacueeMatchesSearch(row, "angela")).toBe(true);
+    expect(evacueeMatchesSearch(row, "dela cruz")).toBe(true);
+    expect(evacueeMatchesSearch(row, "Cruz")).toBe(true);
+    expect(evacueeMatchesSearch(row, "angela@gmail.com")).toBe(true);
+    expect(evacueeMatchesSearch(row, "41")).toBe(true);
+    expect(evacueeMatchesSearch(row, "7")).toBe(true);
+  });
+
+  it("rejects anything that does not appear in the row", () => {
+    expect(evacueeMatchesSearch(row, "santos")).toBe(false);
+  });
+
+  it("treats a blank query as match-everything so search stays optional", () => {
+    expect(evacueeMatchesSearch(row, "   ")).toBe(true);
+  });
+
+  it("matches rows that have no linked account", () => {
+    expect(evacueeMatchesSearch({ id: 3, firstName: "Ben", middleName: null, lastName: "Santos", userEmail: null, householdId: null }, "ben")).toBe(true);
   });
 });

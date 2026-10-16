@@ -103,6 +103,40 @@ button { cursor:pointer; }
 .logout-button{white-space:nowrap}.logout-button svg{flex:none}@media(max-width:800px){.logout-button{padding-inline:10px}.logout-button svg{display:none}}
 .incident-detail-modal{display:grid;gap:20px}.incident-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;padding:16px;border:1px solid #d7e7e2;border-radius:12px;background:#f5faf8}.incident-detail-grid div{display:grid;gap:5px}.incident-detail-grid small{color:#78908b;font-size:.85rem;text-transform:uppercase;letter-spacing:.06em}.incident-detail-grid strong{color:#173f3a}.incident-detail-priority.rose{color:#a63f38}.incident-detail-priority.amber{color:#9b6a20}.incident-detail-priority.blue{color:#356b9c}.incident-detail-copy{margin:0;color:#5d7772;line-height:1.55}.incident-notified{display:flex;align-items:center;gap:9px;padding:13px 14px;border-radius:10px;border:1px solid #b9ddd4;background:#e7f5f1;color:#197d70;font-weight:700}@media(max-width:560px){.incident-detail-grid{grid-template-columns:1fr}}
 .incident-timeline{display:grid;gap:12px}.incident-timeline-head{display:flex;align-items:center;justify-content:space-between}.incident-timeline-head h3{margin:3px 0 0;color:#173f3a;font-size:1rem}.incident-timeline-list{display:grid;gap:0;padding-left:4px}.incident-timeline-event{display:grid;grid-template-columns:18px 1fr;gap:10px;position:relative;padding:0 0 16px}.incident-timeline-event:not(:last-child)::before{content:"";position:absolute;left:7px;top:14px;bottom:0;width:1px;background:#cfe3de}.incident-timeline-dot{width:9px;height:9px;margin-top:4px;border:2px solid #23877b;border-radius:50%;background:#fff;z-index:1}.incident-timeline-dot.complete{border-color:#4e9a61;background:#dff2df}.incident-timeline-event strong{display:block;color:#173f3a;font-size:.9rem}.incident-timeline-event small{display:block;margin-top:2px;color:#78908b;font-size:.85rem}.incident-timeline-event p{margin:5px 0 0;color:#5d7772;font-size:.85rem;line-height:1.4}.incident-timeline-button{display:inline-flex;align-items:center;gap:5px;width:max-content;padding:0;border:0;background:transparent;color:#176f67;font-size:.85rem;font-weight:800;cursor:pointer}.incident-timeline-button:hover{text-decoration:underline}
+/* Two-panel incident detail (spec 4.2): details, timestamps and attachments on
+   the left; map, location and operational action controls on the right. The
+   panels stack vertically on small screens. */
+.incident-detail-panels{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:20px;align-items:start}
+.incident-detail-main{display:grid;gap:20px;min-width:0}
+.incident-detail-side{display:grid;gap:16px;min-width:0}
+.incident-map-block{display:grid;gap:9px}
+.incident-map-canvas{width:100%;height:230px;border-radius:12px;overflow:hidden}
+.incident-location-info{display:grid;gap:5px;padding:13px 14px;border:1px solid #d7e7e2;border-radius:12px;background:#f5faf8}
+.incident-location-info small{color:#78908b;font-size:.85rem;text-transform:uppercase;letter-spacing:.06em}
+.incident-location-info strong{color:#173f3a}
+.incident-location-info a{display:inline-flex;align-items:center;gap:6px;width:max-content;margin-top:3px;color:#176f67;font-size:.85rem;font-weight:800;text-decoration:none}
+.incident-location-info a:hover{text-decoration:underline}
+.incident-side-buttons{display:flex;flex-wrap:wrap;gap:9px}
+.incident-side-buttons button{flex:1 1 auto;justify-content:center;min-height:40px}
+@media(max-width:760px){.incident-detail-panels{grid-template-columns:1fr}}
+/* Notification items that point at an incident open it (spec 4.2). */
+.alert-item.alert-open,.alert-table-cell.alert-open{cursor:pointer;border-radius:6px;transition:background .15s ease}
+.alert-item.alert-open{margin:0 -8px;padding-left:8px;padding-right:8px}
+.alert-item.alert-open:hover,.alert-table-cell.alert-open:hover{background:#f2f9f6}
+.alert-item.alert-open:focus-visible,.alert-table-cell.alert-open:focus-visible{outline:2px solid #23877b;outline-offset:2px}
+.alert-open-hint{display:inline-flex;align-items:center;gap:4px;margin-top:7px;color:#176f67;font-size:.8rem;font-weight:800}
+/* Registry search box (spec 5.30). */
+.registry-search{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid #cfe3de;border-radius:9px;background:#fff;color:#5d7772;min-width:270px}
+.registry-search input{min-width:0;width:100%;border:0;background:transparent;outline:0;color:#173f3a;font-size:.9rem}
+.registry-search input:focus{box-shadow:none}
+@media(max-width:700px){.registry-search{min-width:0;width:100%;margin-top:14px}}
+/* Add-member form and the resolve/reject confirmation dialogs. */
+.member-modal label{display:grid;gap:7px;margin-top:14px;text-align:left}
+.member-modal input,.member-modal select{width:100%;min-height:40px}
+.resolution-backdrop{z-index:110}
+.resolution-dialog label{display:grid;gap:7px;margin-top:14px;text-align:left}
+.resolution-remarks{width:100%;margin-top:2px;padding:11px 12px;border:1px solid #cfe3de;border-radius:10px;background:#fff;color:#173f3a;font:inherit;font-size:.92rem;resize:vertical}
+.resolution-remarks:focus{outline:2px solid #23877b;outline-offset:1px}
 .citizen-app{background:#e0eee8}
 .internal-shell.admin-shell .brand-mark { background:linear-gradient(135deg,#2ea691,#1c857d); }
 .internal-shell.staff-shell .brand-mark { background:linear-gradient(135deg,#5a9ad9,#326eb2); }

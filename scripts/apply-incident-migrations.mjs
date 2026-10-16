@@ -36,6 +36,16 @@ async function run() {
       await connection.query("ALTER TABLE `evacuees` ADD `householdId` int NULL");
     }
 
+    if (!(await hasColumn(connection, "evacuees", "userId"))) {
+      console.log("[incident-migrations] adding evacuees.userId");
+      await connection.query("ALTER TABLE `evacuees` ADD `userId` int NULL");
+    }
+
+    if (!(await hasColumn(connection, "evacuees", "relationshipToHead"))) {
+      console.log("[incident-migrations] adding evacuees.relationshipToHead");
+      await connection.query("ALTER TABLE `evacuees` ADD `relationshipToHead` varchar(60) NULL");
+    }
+
     try {
       await connection.query("ALTER TABLE `evacuees` MODIFY `centerId` int NULL");
     } catch (error) {

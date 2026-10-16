@@ -13,7 +13,14 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const inserts: Array<{ values: Record<string, unknown> }> = [];
 
-const fakeDb = {
+type FakeDb = {
+  select: () => any;
+  insert: () => any;
+  update: () => any;
+  transaction: (fn: (tx: FakeDb) => unknown) => Promise<unknown>;
+};
+
+const fakeDb: FakeDb = {
   select: () => {
     // Every lookup in registerLocalUser is an existence check that must miss.
     const chain = {
@@ -41,6 +48,17 @@ const fakeDb = {
     };
     return chain;
   },
+  update: () => {
+    const chain = {
+      set: () => chain,
+      where: async () => undefined,
+    };
+    return chain;
+  },
+  // registerLocalUser now runs the account, credential and head-of-household
+  // inserts inside one transaction (spec 5.6). The fake db executes the
+  // callback against itself so the tx calls hit the same select/insert chains.
+  transaction: async (fn: (tx: FakeDb) => unknown) => fn(fakeDb),
 };
 
 vi.mock("drizzle-orm/mysql2", () => ({ drizzle: vi.fn(() => fakeDb) }));
@@ -117,5 +135,25 @@ describe("registerLocalUser approval rule", () => {
     });
 
     expect(userRow().email).toBe("resident@example.com");
+  });
+
+  it("creates the head-of-household registry row linked to the account, in the same call", async () => {
+    // Spec 5.6: the account and its registry entry commit together. The third
+    // insert is the head row, carrying the account link (spec 5.3) and the
+    // Head relationship (spec 5.5).
+    await registerLocalUser({
+      ...BASE,
+      hasValidId: false,
+      householdHead: { age: 25, phone: "09171234567", address: "123 Pateros St" },
+    });
+
+    expect(inserts).toHaveLength(3);
+    const head = inserts[2].values;
+    expect(head.userId).toBe(4242);
+    expect(head.relationshipToHead).toBe("Head");
+    expect(head.firstName).toBe("Ana");
+    expect(head.lastName).toBe("Resident");
+    expect(head.centerId).toBeNull();
+    expect(head.status).toBe("ACTIVE");
   });
 });

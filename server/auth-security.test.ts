@@ -91,7 +91,7 @@ describe("auth security procedures", () => {
     const caller = appRouter.createCaller({ user: null, req: { protocol: "https", headers: {} } as TrpcContext["req"], res: response as unknown as TrpcContext["res"] });
 
     await expect(caller.localAuth.register({ firstName: "New", middleName: null, lastName: "Citizen", address: "123 Pateros St", age: 25, phone: "09171234567", email: created.email, password: "valid-password-123" })).resolves.toMatchObject({ approvalRequired: false, email: created.email, approvalToken: expect.any(String) });
-    expect(mockedDb.registerLocalUser).toHaveBeenCalledWith({ firstName: "New", middleName: null, lastName: "Citizen", address: "123 Pateros St", age: 25, phone: "09171234567", name: "New Citizen", email: created.email, password: "valid-password-123", role: "citizen", hasValidId: false });
+    expect(mockedDb.registerLocalUser).toHaveBeenCalledWith({ firstName: "New", middleName: null, lastName: "Citizen", address: "123 Pateros St", age: 25, phone: "09171234567", name: "New Citizen", email: created.email, password: "valid-password-123", role: "citizen", hasValidId: false, householdHead: { age: 25, phone: "09171234567", address: "123 Pateros St" } });
     expect(mockedEmail.sendVerificationEmail).not.toHaveBeenCalled();
     expect(response.cookie).not.toHaveBeenCalled();
   });

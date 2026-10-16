@@ -12,7 +12,7 @@ import {
 } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { clearRateLimit, enforceRateLimit } from "./_core/rateLimit";
-import { getResourceStatus, canTransitionReport, type ReportStatus } from "../shared/operations";
+import { getResourceStatus, canTransitionReport, describeAssignmentNotification, type ReportStatus } from "../shared/operations";
 import { sendInvitationEmail, sendPasswordResetEmail } from "./_core/email";
 import {
   isRoleSelectionAllowed,
@@ -83,7 +83,7 @@ import {
   provisionDemoAccounts,
   queueReportExport,
   registerEvacuee,
-  registerHouseholdHead,
+  countStoredEvidenceForReport,
   updateEvacueeHousehold,
   setActiveSessionToken,  registerLocalUser,
   reviewIdDocument,
@@ -203,6 +203,7 @@ const evacueeInput = z.object({
   specialNeeds: z.string().optional(),
   centerId: z.number().int().positive(),
   householdId: z.number().int().positive().nullable().optional(),
+  relationshipToHead: z.string().trim().max(60).optional(),
 });
 const centerInput = z.object({
   centerCode: z.string().min(2).max(32),
@@ -722,6 +723,10 @@ export const appRouter = router({
             message:
               "Only Citizen accounts can self-register. Operational roles require an Administrator invitation or demo provisioning.",
           });
+        // The head-of-household registry row is created inside the same
+        // transaction as the account (spec 5.6): if either insert fails the
+        // whole registration rolls back, so an account can never exist without
+        // its registry entry.
         const user = await registerLocalUser({
           email: input.email,
           password: input.password,
@@ -736,20 +741,12 @@ export const appRouter = router({
             .join(" "),
           role: input.role,
           hasValidId: Boolean(input.validId),
-        });
-
-        try {
-          await registerHouseholdHead({
-            firstName: input.firstName,
-            middleName: input.middleName?.trim() || null,
-            lastName: input.lastName,
+          householdHead: {
             age: input.age,
             phone: input.phone,
             address: input.address,
-          });
-        } catch (error) {
-          console.warn("[Registration] Household registry population failed:", error);
-        }
+          },
+        });
 
         // The ID is attached after the account is created, not before.
         //
@@ -1485,12 +1482,16 @@ export const appRouter = router({
         broadcastAssignment({ reportId: input.reportId, assignedResponderId: input.responderId });
         if (input.responderId !== null && report.reportedAt) {
           try {
-            const coordinates = report.latitude != null && report.longitude != null
-              ? ` Pin: https://www.google.com/maps/search/?api=1&query=${report.latitude},${report.longitude}`
-              : "";
+            // Spec 4.1: the responder's notification carries the whole
+            // assignment — status, assigned time and whether attachments are
+            // waiting — so the incident can be assessed before it is opened.
+            const attachmentCount = await countStoredEvidenceForReport(report.id);
             const alert = await createAlert({
               title: `${report.priority} incident assignment`,
-              message: `${report.reportCode || `Incident ${report.id}`} requires responder attention at ${report.location}: ${report.description}. Reporter: ${report.complainantName || "Unknown"}. Reported ${new Date(report.reportedAt).toLocaleString()}.${coordinates}`,
+              message: describeAssignmentNotification(report, {
+                assignedAt: now,
+                attachmentCount,
+              }),
               alertType: "INCIDENT_ASSIGNMENT",
               priority: report.priority,
               targetAudience: "RESPONDERS",
