@@ -36,11 +36,20 @@ type Attachment = {
   status?: string | null;
 };
 
+type AuditEntry = {
+  id: number;
+  action: string;
+  actorName?: string | null;
+  createdAt: Date | string;
+};
+
 type Props = {
   incident: IncidentSummary;
   detail?: ReportDetail | null;
   actions?: TimelineEvent[];
   attachments?: Attachment[];
+  assignedResponderName?: string | null;
+  auditTrail?: AuditEntry[];
   printedBy?: string | null;
   onClose: () => void;
 };
@@ -48,7 +57,7 @@ type Props = {
 const formatDate = (value?: Date | string | null) => (value ? new Date(value).toLocaleString() : "—");
 const statusLabel = (value?: string) => (value ?? "").replace(/_/g, " ") || "—";
 
-export default function IncidentReportDocument({ incident, detail, actions, attachments, printedBy, onClose }: Props) {
+export default function IncidentReportDocument({ incident, detail, actions, attachments, assignedResponderName, auditTrail, printedBy, onClose }: Props) {
   const pageRef = useRef<HTMLDivElement>(null);
   const reportCode = detail?.reportCode ?? incident.id;
   const reportType = detail?.reportType ?? incident.type;
@@ -100,6 +109,7 @@ export default function IncidentReportDocument({ incident, detail, actions, atta
               <div><small>Report type</small><strong>{reportType}</strong></div>
               <div><small>Priority</small><strong className={`incident-detail-priority ${incident.color}`}>{priority}</strong></div>
               <div><small>Status</small><strong>{statusLabel(status)}</strong></div>
+              <div><small>Assigned responder</small><strong>{assignedResponderName ?? "Unassigned"}</strong></div>
               <div><small>Reported at</small><strong>{formatDate(reportedAt)}</strong></div>
               <div><small>Responded at</small><strong>{formatDate(respondedAt)}</strong></div>
               <div><small>Resolved at</small><strong>{formatDate(resolvedAt)}</strong></div>
@@ -139,6 +149,26 @@ export default function IncidentReportDocument({ incident, detail, actions, atta
                       <td>{formatDate(action.arrivalAt)}</td>
                       <td>{formatDate(action.completedAt)}</td>
                       <td>{formatDate(action.createdAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+
+          {auditTrail && auditTrail.length > 0 && (
+            <section className="report-section">
+              <h2>Report history (audit log)</h2>
+              <table className="report-table">
+                <thead>
+                  <tr><th>Actor</th><th>Action</th><th>Logged</th></tr>
+                </thead>
+                <tbody>
+                  {auditTrail.map(entry => (
+                    <tr key={entry.id}>
+                      <td>{entry.actorName || "System"}</td>
+                      <td>{entry.action}</td>
+                      <td>{formatDate(entry.createdAt)}</td>
                     </tr>
                   ))}
                 </tbody>

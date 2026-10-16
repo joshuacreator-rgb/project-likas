@@ -2,18 +2,20 @@
 
 **Date**: 2026-10-16 · **Method**: code inspection against the adopted specification (Unified Auth · Dashboard Metrics · Incident Reporting & Dispatch · Responder Interface · Evacuee Registry & Households · Real-Time Sync). Every verdict carries a file:line reference. Test/verification history for the already-delivered parts is in `client-change-request-backlog.md` §1–§25.
 
-**Overall: 71 requirements — 61 DONE (86%), 10 PARTIAL (14%), 0 NOT DONE.**
+**Overall: 71 requirements — 67 DONE (94%), 4 PARTIAL (6%), 0 NOT DONE.**
 
 > **Update (2026-10-16, clusters A+B):** the evacuee-registry cluster (G2/G6/G7/G11) and the responder-interface cluster (G1/G10/G8) are implemented **and verified live on staging** (deploy `ade6e4f6`, https://likas.fyi): smoke 10/10, browser 9/9, and the full API e2e (`verify-clusters-live.mjs`) 34/34 — covering the migration columns, atomic registration with the linked `"Head"` row, the enriched assignment notification (status/assigned-time/attachments/maps pin, `reportId` carried), alert → incident open, resolve with optional remarks (alert ends), reject with note, `userEmail` join, real household count and LN→FN→MN responder order. All four former NOT-DONE verdicts are closed; 11 PARTIAL verdicts moved to DONE.
+>
+> **Update (2026-10-16, small batch G3/G9/G13/G14):** four more gaps closed. **1.8/6.7** — the cross-tab auth listener moved from the Login page into app-wide `client/src/lib/authBroadcast.ts`; `useAuthBroadcastKick()` is mounted in `RouteGuard`, and `useAuth.logout` broadcasts `likas-logout`, so an open dashboard tab redirects to `/login` the moment any other tab signs in or out. **4.6** — the PDF gained the "Assigned responder" field and a "Report history (audit log)" table, both fed by a server-enriched `operations.incidentTimeline` (`assignedResponderName`, `auditTrail`). **3.2** — incident IDs are now generated server-side (`createRiskReport` → `RPT-<base36>-<hex>` with duplicate-key retry; clients no longer send `reportCode` on live paths), pinned by `server/report-code.test.ts`. **5.29** — `listDemoAccounts` sorts LN→FN→MN with a display-name fallback. Gates: tsc clean, **358/358 vitest**, build green.
 
 | Section | Requirements | DONE | PARTIAL | NOT DONE |
 |---|---|---|---|---|
-| 1. Unified Authentication & Role-Based Login | 9 | 7 | 2 | 0 |
+| 1. Unified Authentication & Role-Based Login | 9 | 9 | 0 | 0 |
 | 2. Dashboard Metrics & Interactive Navigation | 8 | 6 | 2 | 0 |
-| 3. Incident Reporting & Admin Dispatch | 10 | 7 | 3 | 0 |
-| 4. Responder Interface & Incident Resolution | 6 | 5 | 1 | 0 |
-| 5. Evacuee Registry & Household Management | 30 | 29 | 1 | 0 |
-| 6. Real-Time Database Synchronization | 8 | 7 | 1 | 0 |
+| 3. Incident Reporting & Admin Dispatch | 10 | 8 | 2 | 0 |
+| 4. Responder Interface & Incident Resolution | 6 | 6 | 0 | 0 |
+| 5. Evacuee Registry & Household Management | 30 | 30 | 0 | 0 |
+| 6. Real-Time Database Synchronization | 8 | 8 | 0 | 0 |
 
 ---
 
@@ -28,7 +30,7 @@
 | 1.5 | Authentication persists across authorized pages | **DONE** | 7-day `likas_session` JWT cookie validated per request (`server/_core/context.ts:10-30`); `auth.me` session state |
 | 1.6 | Role-based access control (server **and** client) | **DONE** | `protectedProcedure`/`adminProcedure` (`server/_core/trpc.ts:28-45`), `roleProcedure` with per-procedure role arrays (`server/routers.ts:144-152`); client `RouteGuard` redirects mismatches (`App.tsx:79-97,127-138`) |
 | 1.7 | User listings sorted Last → First → Middle | **DONE** | `compareNames` (`shared/operations.ts:100`); applied on "User & roles" (`Home.tsx:2769`), heads list, member table, evacuee rows |
-| 1.8 | New login in tab 2 invalidates tab 1; stale tab auto-redirects to `/login` | **PARTIAL** | Server side enforced: new login overwrites `activeSessionToken`, old JWT's `sid` fails validation (`server/routers.ts:261`, `context.ts:26`). **Client gap:** the `likas-login`/`likas-logout` BroadcastChannel listener is mounted **only on the Login page** (`Login.tsx:52-96`); an already-open dashboard tab has no listener, so it does not proactively redirect — it only discovers the change on its next `auth.me` refetch |
+| 1.8 | New login in tab 2 invalidates tab 1; stale tab auto-redirects to `/login` | **DONE** | Server side enforced: new login overwrites `activeSessionToken`, old JWT's `sid` fails validation (`server/routers.ts:261`, `context.ts:26`). Client side: shared `client/src/lib/authBroadcast.ts` — `useAuthBroadcastKick()` is mounted in `RouteGuard` (`client/src/App.tsx:86-91`), so every open dashboard tab redirects to `/login` the moment another tab logs in or out; `useAuth.logout` broadcasts `likas-logout` (`_core/hooks/useAuth.ts`), and the Login page keeps the same hook for its half-typed-form reload |
 | 1.9 | Same account in a second tab reuses the session | **DONE** | Cookie-based session; second tab needs no re-login (`useAuth.ts:44`) |
 
 ## 2. Dashboard Metrics and Interactive Navigation
@@ -49,7 +51,7 @@
 | # | Requirement | Status | Evidence |
 |---|---|---|---|
 | 3.1 | Report contains all 10 elements (ID, complainant, type, description, location, date, time, image, status, responder) | **DONE** | `drizzle/schema.ts:28-29` (`reportCode`, `complainantName`, `reportType`, `description`, location+coords, `status`, `assignedResponderId`, timestamp triad; images in `evidence_files`) |
-| 3.2 | Unique ID auto-generated + server-side submission timestamp | **PARTIAL** | Timestamp is server-side (`reportedAt defaultNow()`, client cannot send it). **ID is generated client-side** (`CIT-${Date.now()}`, `CitizenHome.tsx:755,773`; `RPT-…`, `Home.tsx:714`); uniqueness rests on the DB unique index |
+| 3.2 | Unique ID auto-generated + server-side submission timestamp | **DONE** | Timestamp is server-side (`reportedAt defaultNow()`). ID is now generated **server-side**: clients no longer send `reportCode` on live submissions (static-demo paths keep their local codes); `createRiskReport` generates `RPT-<base36 time>-<hex>` with a duplicate-key retry (`server/db.ts:83-84`); `reportCode` is optional in the input (`server/routers.ts:181`); pinned by `server/report-code.test.ts` |
 | 3.3 | Original details permanently preserved | **DONE** | Dispatch update schema admits only `status`/`assignedResponderId`/`resolution` (`server/routers.ts:1305-1320`) — complainant/location/timestamps/description/images cannot be overwritten; verified in QA (orig-data-preserved) |
 | 3.4 | Queue: auto-appear, new/unreviewed highlighted, prioritized at top, sortable by urgency/date/time/status | **PARTIAL** | Auto-appear (SSE + poll) and default newest-first (`server/db.ts:84`) exist. **No sort control at all** in the incident list, and **no new/unreviewed highlight** (only the amber PENDING badge) |
 | 3.5 | Click a report to review complete information | **DONE** | Timeline modal with full detail, attachments, history (`Home.tsx:1493-1706`) |
@@ -68,7 +70,7 @@
 | 4.3 | Resolve: validate assignment, **confirmation step**, status+timestamp, **optional resolution remarks**, dashboard/notification update, history | **DONE** | Server validates and transitions, sets `resolvedAt`, logs history (`routers.ts:1326-1346, 1388-1399`). Client: Resolve button in the detail modal's action panel (`Home.tsx:1951-1982`) and the list rows both open the shared `ResolutionDialog` (`Home.tsx:255-330`) — confirm + optional remarks textarea, saved via `updateRiskReport({ status, resolution })`; no blind one-click mutation remains |
 | 4.4 | Reject: confirmation, optional note, timestamp+remarks, admin notified, counts updated | **DONE** | Reject goes through the same `ResolutionDialog` (confirm + optional note) instead of `window.confirm`/`window.prompt` (`Home.tsx:255-330`, wired at `Home.tsx:1983-1999` and the reports list); `rejectedAt`, admin alert broadcast (`routers.ts:1365-1381`), summary invalidation; rejection remarks also render in the incident timeline (`Home.tsx` timeline REJECTED branch) |
 | 4.5 | Real-time sync across admin management, dashboards, notifications, history, official records | **DONE** | `/api/stream` SSE + 1.5 s polls + targeted invalidations (`Home.tsx:440-488, 423-430`); verified live in QA |
-| 4.6 | PDF report with all 10 listed fields | **PARTIAL** | `IncidentReportDocument.tsx` includes 9/10: ID (93), type+description (100,115-118), location+coords (108-111), reported time (103), dispatch timestamp (104), final status (102), resolution/rejection (106,120-125), complainant (107), responder actions (127-147). **Missing: "Assigned responder" entirely**, and the "history" excludes the audit/activity-log rows |
+| 4.6 | PDF report with all 10 listed fields | **DONE** | `IncidentReportDocument.tsx`: ID (93), type+description (100,115-118), location+coords (108-111), reported time (103), dispatch timestamp (104), final status (102), resolution/rejection (106,120-125), complainant (107), responder actions (127-147) — **plus the two former gaps**: "Assigned responder" grid field (fed by `assignedResponderName` resolved server-side in `operations.incidentTimeline`, `server/routers.ts:1406-1412`) and the audit/activity-log rows as a "Report history" table (`listReportAuditTrail`, `server/db.ts:91`) |
 
 ## 5. Evacuee Registry and Household Management
 
@@ -102,7 +104,7 @@
 | 5.26 | Table updates immediately | **DONE** | Invalidation + poll |
 | 5.27 | Member count recalculated | **DONE** | `Home.tsx:2668` |
 | 5.28 | Changes synchronize across dashboards | **DONE** | `broadcastEvacuee` (`routers.ts:1146,1197`) → SSE invalidation + polling backup |
-| 5.29 | Consistent Last → First → Middle sorting on all listings | **PARTIAL** | LN→FN→MN via `compareNames` on heads list, member table, evacuee rows, User & roles — **and now also the responder list**: `listResponders` orders by `lastName, firstName, middleName` (`server/db.ts:43`), so the assignment dropdown follows. **Remaining**: demo-accounts list (date order) |
+| 5.29 | Consistent Last → First → Middle sorting on all listings | **DONE** | LN→FN→MN via `compareNames` on heads list, member table, evacuee rows, User & roles, and the responder assignment dropdown (`listResponders`, `server/db.ts:43`). The last holdout is closed: `listDemoAccounts` orders by `coalesce(lastName), coalesce(firstName), coalesce(middleName)` with `coalesce(name)` as the fallback tiebreaker (`server/db.ts:46`) |
 | 5.30 | Search over names, usernames, household IDs, etc. | **DONE** | `evacueeMatchesSearch` (`shared/operations.ts:106`, tests in `server/operations.test.ts`) matches first/middle/last name, the linked account's email (`userEmail`), household ID and member ID; reachable from the dedicated search box on the Evacuees screen (`Home.tsx:3037`-area), filtering heads and members |
 
 ## 6. Real-Time Database Synchronization
@@ -115,7 +117,7 @@
 | 6.4 | Resolving updates admin statistics live | **DONE** | Resolve/reject broadcasts + summary invalidation (`routers.ts:1359-1377`, `Home.tsx:456-466`) |
 | 6.5 | Registering a head updates the registry live | **DONE** | `broadcastEvacuee` (`routers.ts:1146`) → evacuees/summary/centers invalidation |
 | 6.6 | Adding a member updates family counts | **DONE** | Evacuee broadcast + member-count recompute + 1.5 s poll |
-| 6.7 | Switching accounts invalidates the previous session | **PARTIAL** | Server invalidation is complete; the **client broadcast is only consumed on the Login page** (see 1.8) — an open dashboard tab is not proactively redirected |
+| 6.7 | Switching accounts invalidates the previous session | **DONE** | Server invalidation is complete (single active session token per user); the client broadcast is now consumed on every dashboard tab via `useAuthBroadcastKick()` in `RouteGuard` (`client/src/App.tsx`), and logout itself announces `likas-logout` (`useAuth.ts` → `lib/authBroadcast.ts`) — see 1.8 |
 | 6.8 | UI confirms only after the server validates/saves | **DONE** | Incident submit, household add/remove and login all await the server response; `isPending` gates submits; no optimistic-only writes |
 
 ---
@@ -128,17 +130,17 @@ Ordered by weight. "Spec" points at the requirements above.
 |---|---|---|---|---|
 | ~~**G1**~~ | Responder interface: alert-center items must open the incident; detail view needs the two-panel layout (left details/images, right map/location/controls) that stacks on small screens | 4.2 | **Large** | **Closed 2026-10-16** |
 | ~~**G2**~~ | Household data model: link accounts to registry rows (`evacuees.userId`), registry-level dedupe, atomic registration, real household counting for the metric | 5.3, 5.4, 5.6, 5.11, 2.1 | **Large** — needed a migration | **Closed 2026-10-16** (migration `drizzle/0020_registry_link_and_relationship.sql` + boot-script column checks) |
-| **G3** | Cross-tab session kick: move the BroadcastChannel/storage listener from the Login page into the app shell so a stale dashboard tab redirects to `/login` when another account signs in | 1.8, 6.7 | Small | Open |
+| ~~**G3**~~ | Cross-tab session kick: move the BroadcastChannel/storage listener from the Login page into the app shell so a stale dashboard tab redirects to `/login` when another account signs in | 1.8, 6.7 | Small | **Closed 2026-10-16** (`client/src/lib/authBroadcast.ts` + `RouteGuard` mount + logout broadcast in `useAuth`) |
 | **G4** | ~~Dashboard: make "Total Households" a real clickable card~~ → narrowed: give the upper metric grid + cards loading/error states | 2.2, 2.7 | Small | **Narrowed** — 2.1 closed (card + real count); loading/error states remain |
 | **G5** | Incident queue: sort control (urgency/date/time/status) and a new/unreviewed highlight | 3.4 | Medium | Open |
 | ~~**G6**~~ | Add Member: replace the two `window.prompt`s with the already-declared modal form (plus fuller validation) | 5.16, 5.17, 5.18 | Small–Medium | **Closed 2026-10-16** |
 | ~~**G7**~~ | Registry search on the heads list (names, username, household ID) and reaching the existing evacuee search from the screen | 5.13, 5.30 | Small | **Closed 2026-10-16** |
 | ~~**G8**~~ | Resolve flow: confirmation dialog + optional resolution-remarks field on the client | 4.3 | Small | **Closed 2026-10-16** |
-| **G9** | PDF: add "Assigned responder" and include the audit/activity-log rows in the action history | 4.6 | Small | Open |
+| ~~**G9**~~ | PDF: add "Assigned responder" and include the audit/activity-log rows in the action history | 4.6 | Small | **Closed 2026-10-16** (server-enriched `incidentTimeline`: `assignedResponderName` + `auditTrail`; rendered in `IncidentReportDocument`) |
 | ~~**G10**~~ | Assignment notification completeness: carry status, assigned date/time and image link | 4.1 | Small | **Closed 2026-10-16** (message carries attachment count + instruction to open the incident; images render in its left panel) |
 | ~~**G11**~~ | Member table: add the "Relationship to Head" column; store relationship instead of inferring head status | 5.15, 5.5 | Small | **Closed 2026-10-16** |
 | **G12** | Responder availability: filter or flag responders already engaged on open incidents | 3.7 | Medium | Open |
-| **G13** | Incident ID generation server-side (currently client-generated, uniqueness via DB index) | 3.2 | Trivial | Open |
-| **G14** | ~~Apply LN→FN→MN sorting to the responder dropdown and~~ demo-accounts list | 5.29 | Trivial | **Narrowed** — responder dropdown now sorted in `listResponders` (`server/db.ts:43`); demo-accounts list remains |
+| ~~**G13**~~ | Incident ID generation server-side (currently client-generated, uniqueness via DB index) | 3.2 | Trivial | **Closed 2026-10-16** (`createRiskReport` generates `RPT-<base36>-<hex>` + duplicate-key retry; `server/report-code.test.ts`) |
+| ~~**G14**~~ | ~~Apply LN→FN→MN sorting to the responder dropdown and~~ demo-accounts list | 5.29 | Trivial | **Closed 2026-10-16** — responder dropdown in `listResponders`; demo-accounts list in `listDemoAccounts` (`coalesce(lastName), coalesce(firstName), coalesce(middleName)`, `coalesce(name)` fallback) |
 
-**Standing note (updated).** All four former NOT-DONE verdicts (4.2, 5.3, 5.6, 5.17) are now DONE and closed by the cluster work above; nothing in the six-section spec is NOT DONE anymore. Remaining PARTIALs are concentrated in §1 (2), §3 (3), §4 (4.6 PDF), §5 (5.29 demo-accounts sort), §6 (1) plus §2's 2.2/2.7. Gates are green (`tsc`, 353/353 vitest, build, smoke 10/10, browser 9/9, live e2e 34/34 on deploy `ade6e4f6`).
+**Standing note (updated).** All four former NOT-DONE verdicts (4.2, 5.3, 5.6, 5.17) are closed, and §1/§4/§5/§6 are now fully DONE. Only **4 PARTIALs remain**: 2.2 (upper metric grid not clickable), 2.7 (loading/error states on metric cards + Risk reports list), 3.4 (incident-queue sort control + unreviewed highlight = G5), 3.7 (responder availability/busy check = G12). Gates are green (`tsc`, 358/358 vitest incl. `report-code.test.ts`, build).

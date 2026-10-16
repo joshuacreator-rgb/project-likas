@@ -8,6 +8,7 @@ import { getHomePath } from "../../shared/roles";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { useAuth } from "./_core/hooks/useAuth";
+import { useAuthBroadcastKick } from "./lib/authBroadcast";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 import AccountRegister from "./pages/AccountRegister";
@@ -84,6 +85,10 @@ function RouteGuard({
   children: ReactNode;
 }) {
   const { user, loading, error, refresh } = useAuth();
+  // Spec 1.8/6.7: a login or logout in another tab invalidates this tab's
+  // session server-side — kick it back to /login now instead of letting it
+  // show a dead dashboard until the next auth.me refetch.
+  useAuthBroadcastKick();
   if (loading) return <RouteSplash />;
   // An unconfirmed session on a failed check is not a logout: offer a retry
   // instead of redirecting (and never fall through to a static role).

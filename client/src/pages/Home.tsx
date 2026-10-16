@@ -887,7 +887,6 @@ export default function Home() {
     }
     try {
       const created = await createReportMutation.mutateAsync({
-        reportCode: `RPT-${Date.now().toString(36).toUpperCase()}`,
         reportType,
         location: reportLocation,
         priority: reportPriority,
@@ -931,6 +930,8 @@ export default function Home() {
           detail={incidentTimeline?.report ?? null}
           actions={incidentTimeline?.actions ?? []}
           attachments={evidenceRows?.map(row => ({ id: row.id, fileName: row.fileName, status: row.status })) ?? []}
+          assignedResponderName={incidentTimeline?.assignedResponderName ?? null}
+          auditTrail={incidentTimeline?.auditTrail ?? []}
           printedBy={user?.name}
           onClose={() => setIncidentReportOpen(false)}
         />

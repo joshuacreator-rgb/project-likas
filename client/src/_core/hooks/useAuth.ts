@@ -2,6 +2,7 @@ import { startLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { TRPCClientError } from "@trpc/client";
 import { clearStaticOverrides, getStaticSession } from "@/lib/staticAuth";
+import { broadcastAuthEvent } from "@/lib/authBroadcast";
 import { useCallback, useEffect, useMemo } from "react";
 
 const staticDemoRoles = ["admin", "staff", "responder", "citizen"] as const;
@@ -71,6 +72,9 @@ export function useAuth(options?: UseAuthOptions) {
         sessionStorage.removeItem("manus-cookie");
         clearStaticOverrides();
       } catch {}
+      // Spec 6.7: every other tab is holding a session the server just ended —
+      // tell them now so they redirect to /login immediately.
+      broadcastAuthEvent("likas-logout");
       utils.auth.me.setData(undefined, null);
       await utils.auth.me.invalidate();
     }

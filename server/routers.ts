@@ -43,6 +43,7 @@ import {
   getAlertById,
   getResourceById,
   getRiskReportById,
+  getResponderDisplayName,
   getRoleChangeRequest,
   getIdDocumentById,
   getLatestIdDocumentForUser,
@@ -72,6 +73,7 @@ import {
   listResourcesForCenters,
   listResourceTransactions,
   listResponderActions,
+  listReportAuditTrail,
   listRiskReports,
   listRiskReportsForUser,
   listResponders,
@@ -178,7 +180,7 @@ const adviceStepShape = z.object({
   imageKey: z.string().max(500).nullish(),
 });
 const reportInput = z.object({
-  reportCode: z.string().min(4).max(32),
+  reportCode: z.string().min(4).max(32).optional(),
   reportType: z.string().min(2).max(80),
   description: z.string().min(5),
   complainantName: z.string().min(1).max(180).optional(),
@@ -1403,7 +1405,12 @@ export const appRouter = router({
         if (!report) throw new TRPCError({ code: "NOT_FOUND", message: "Incident not found." });
         if (ctx.user.role === "responder" && report.assignedResponderId !== ctx.user.id)
           throw new TRPCError({ code: "FORBIDDEN", message: "You can only view incidents assigned to you." });
-        return { report, actions: await listResponderActions(input.reportId) };
+        return {
+          report,
+          actions: await listResponderActions(input.reportId),
+          assignedResponderName: report.assignedResponderId ? await getResponderDisplayName(report.assignedResponderId) : null,
+          auditTrail: await listReportAuditTrail(input.reportId),
+        };
       }),
     addResponderAction: roleProcedure(["admin", "responder"])
       .input(

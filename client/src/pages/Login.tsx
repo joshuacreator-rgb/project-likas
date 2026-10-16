@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -19,6 +19,7 @@ import {
   clearStaticDemoRole,
   clearStaticOverrides,
 } from "@/lib/staticAuth";
+import { broadcastAuthEvent, useAuthBroadcastKick } from "@/lib/authBroadcast";
 import AccountRegister from "./AccountRegister";
 import PasswordRecovery from "./PasswordRecovery";
 
@@ -41,59 +42,11 @@ export default function Login() {
 
   const isTwoFactorStep = Boolean(challengeToken);
 
-  const tabId = useMemo(() => {
-    const existing = window.sessionStorage.getItem("project-likas-tab-id");
-    if (existing) return existing;
-    const next = crypto.randomUUID();
-    window.sessionStorage.setItem("project-likas-tab-id", next);
-    return next;
-  }, []);
-
-  useEffect(() => {
-    const handleEvent = (payload: { type?: string; tabId?: string } | null) => {
-      if (!payload || payload.tabId === tabId) return;
-      if (payload.type === "likas-login" || payload.type === "likas-logout") {
-        window.location.replace("/login");
-      }
-    };
-
-    let channel: BroadcastChannel | null = null;
-    if (typeof BroadcastChannel !== "undefined") {
-      channel = new BroadcastChannel("project-likas-auth");
-      channel.onmessage = (event) => handleEvent(event.data);
-    }
-    const onStorage = (event: StorageEvent) => {
-      if (event.key !== "project-likas-auth" || !event.newValue) return;
-      try {
-        handleEvent(JSON.parse(event.newValue));
-      } catch {
-        // Ignore malformed cross-tab events.
-      }
-    };
-    window.addEventListener("storage", onStorage);
-
-    return () => {
-      channel?.close();
-      window.removeEventListener("storage", onStorage);
-    };
-  }, [tabId]);
-
-  function broadcastAuth(type: string) {
-    const payload = { type, tabId, at: Date.now() };
-    if (typeof BroadcastChannel !== "undefined") {
-      try {
-        new BroadcastChannel("project-likas-auth").postMessage(payload);
-      } catch {
-        // Fallback storage-only.
-      }
-    }
-    try {
-      window.localStorage.setItem("project-likas-auth", JSON.stringify(payload));
-      window.localStorage.removeItem("project-likas-auth");
-    } catch {
-      // Ignore storage restrictions.
-    }
-  }
+  // Spec 1.8: while sitting on /login, an auth event from ANOTHER tab (that
+  // tab signed in or out) reloads this page too, dropping any half-typed
+  // credentials or stale 2FA step. The same hook on every dashboard route is
+  // what kicks an already-signed-in tab back here.
+  useAuthBroadcastKick();
 
   const login = trpc.localAuth.login.useMutation({
     onSuccess: (result) => {
@@ -102,7 +55,7 @@ export default function Login() {
         return;
       }
       clearStaticOverrides();
-      broadcastAuth("likas-login");
+      broadcastAuthEvent("likas-login");
       navigate(getHomePath(result.user?.role));
     },
     onError: () => {
@@ -117,7 +70,7 @@ export default function Login() {
   const verifyTwoFactor = trpc.localAuth.verifyTwoFactor.useMutation({
     onSuccess: (result) => {
       clearStaticOverrides();
-      broadcastAuth("likas-login");
+      broadcastAuthEvent("likas-login");
       navigate(getHomePath(result.user?.role));
     },
   });

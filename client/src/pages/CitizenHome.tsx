@@ -556,7 +556,6 @@ export default function CitizenHome() {
         while (remaining.length) {
           const queued = remaining[0];
           const created = await createReportMutation.mutateAsync({
-            reportCode: `CIT-${Date.now()}-${remaining.length}`,
             reportType: "Citizen emergency",
             description: queued.reportText,
             location: queued.location,
@@ -770,7 +769,6 @@ export default function CitizenHome() {
     }
     createReportMutation.mutate(
       {
-        reportCode: `CIT-${Date.now()}`,
         reportType: "Citizen emergency",
         description: reportText.trim(),
         location: location.trim(),
